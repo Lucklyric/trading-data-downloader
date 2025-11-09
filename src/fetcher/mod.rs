@@ -9,6 +9,7 @@ use std::pin::Pin;
 pub mod archive;
 pub mod binance_futures_coin;
 pub mod binance_futures_usdt;
+pub mod binance_http;
 
 /// Fetcher errors (T033)
 #[derive(Debug, thiserror::Error)]
