@@ -12,6 +12,7 @@ pub mod binance_futures_coin;
 pub mod binance_futures_usdt;
 pub mod binance_http;
 pub mod binance_parser;
+pub mod pagination;
 
 /// Fetcher errors (T033)
 #[derive(Debug, thiserror::Error)]
