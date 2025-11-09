@@ -1,0 +1,665 @@
+//! Download command implementation (T082-T087)
+
+use crate::downloader::{DownloadExecutor, DownloadJob, JobProgress};
+use crate::Interval;
+use chrono::{DateTime, FixedOffset, NaiveDate};
+use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
+use serde::Serialize;
+use std::path::PathBuf;
+use std::str::FromStr;
+use tracing::{error, info};
+
+use super::CliError;
+
+/// Trading Data Downloader CLI (T082)
+#[derive(Parser, Debug)]
+#[command(name = "trading-data-downloader")]
+#[command(about = "Download crypto trading data from supported exchanges", long_about = None)]
+#[command(version)]
+pub struct Cli {
+    /// Command to execute
+    #[command(subcommand)]
+    pub command: Commands,
+
+    /// Output format (json or human)
+    #[arg(long, global = true, default_value = "human")]
+    pub output_format: OutputFormat,
+
+    /// Enable resume capability
+    #[arg(long, global = true)]
+    pub resume: bool,
+
+    /// Resume state directory
+    #[arg(long, global = true)]
+    pub resume_dir: Option<PathBuf>,
+}
+
+/// CLI commands
+#[derive(Subcommand, Debug)]
+pub enum Commands {
+    /// Download trading data
+    Download(DownloadArgs),
+
+    /// List available data sources and symbols
+    Sources(super::SourcesCommand),
+}
+
+/// Download command arguments (T083-T084)
+#[derive(Parser, Debug)]
+pub struct DownloadArgs {
+    /// Data type to download
+    #[command(subcommand)]
+    pub data_type: DataType,
+}
+
+/// Data types available for download
+#[derive(Subcommand, Debug)]
+pub enum DataType {
+    /// Download OHLCV bars
+    Bars(BarsArgs),
+    /// Download aggregate trades
+    AggTrades(AggTradesArgs),
+    /// Download funding rates
+    Funding(FundingArgs),
+}
+
+/// Arguments for downloading bars (T084)
+#[derive(Parser, Debug)]
+pub struct BarsArgs {
+    /// Exchange identifier (e.g., BINANCE:BTC/USDT:USDT)
+    #[arg(long)]
+    pub identifier: String,
+
+    /// Trading symbol (e.g., BTCUSDT)
+    #[arg(long)]
+    pub symbol: String,
+
+    /// Time interval (e.g., 1m, 1h, 1d)
+    #[arg(long)]
+    pub interval: String,
+
+    /// Start time (YYYY-MM-DD format)
+    #[arg(long)]
+    pub start_time: String,
+
+    /// End time (YYYY-MM-DD format)
+    #[arg(long)]
+    pub end_time: String,
+
+    /// Output file path
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+}
+
+/// Arguments for downloading aggregate trades (T129)
+#[derive(Parser, Debug)]
+pub struct AggTradesArgs {
+    /// Exchange identifier (e.g., BINANCE:BTC/USDT:USDT)
+    #[arg(long)]
+    pub identifier: String,
+
+    /// Trading symbol (e.g., BTCUSDT)
+    #[arg(long)]
+    pub symbol: String,
+
+    /// Start time (YYYY-MM-DD format or YYYY-MM-DDTHH:MM:SS)
+    #[arg(long)]
+    pub start_time: String,
+
+    /// End time (YYYY-MM-DD format or YYYY-MM-DDTHH:MM:SS)
+    #[arg(long)]
+    pub end_time: String,
+
+    /// Output file path
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+}
+
+/// Arguments for downloading funding rates (T151)
+#[derive(Parser, Debug)]
+pub struct FundingArgs {
+    /// Exchange identifier (e.g., BINANCE:BTC/USDT:USDT)
+    #[arg(long)]
+    pub identifier: String,
+
+    /// Trading symbol (e.g., BTCUSDT)
+    #[arg(long)]
+    pub symbol: String,
+
+    /// Start time (YYYY-MM-DD format or YYYY-MM-DDTHH:MM:SS)
+    #[arg(long)]
+    pub start_time: String,
+
+    /// End time (YYYY-MM-DD format or YYYY-MM-DDTHH:MM:SS)
+    #[arg(long)]
+    pub end_time: String,
+
+    /// Output file path
+    #[arg(long, short = 'o')]
+    pub output: Option<PathBuf>,
+}
+
+/// Output format options (T086)
+#[derive(Debug, Clone, Copy)]
+pub enum OutputFormat {
+    /// JSON output
+    Json,
+    /// Human-readable output
+    Human,
+}
+
+impl FromStr for OutputFormat {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "json" => Ok(OutputFormat::Json),
+            "human" => Ok(OutputFormat::Human),
+            _ => Err(format!("Invalid output format: {}", s)),
+        }
+    }
+}
+
+/// Download result for JSON output
+#[derive(Debug, Serialize)]
+struct DownloadResult {
+    success: bool,
+    identifier: String,
+    symbol: String,
+    interval: String,
+    start_time: i64,
+    end_time: i64,
+    output_path: String,
+    bars_downloaded: u64,
+    bars_written: u64,
+    api_requests: u64,
+    retries: u64,
+    error: Option<String>,
+}
+
+impl BarsArgs {
+    /// Parse start time from YYYY-MM-DD format
+    fn parse_start_time(&self) -> Result<i64, CliError> {
+        let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {}", e)))?;
+
+        let datetime = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| CliError::InvalidArgument("Invalid start time".to_string()))?;
+
+        Ok(datetime.and_utc().timestamp_millis())
+    }
+
+    /// Parse end time from YYYY-MM-DD format
+    fn parse_end_time(&self) -> Result<i64, CliError> {
+        let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {}", e)))?;
+
+        let datetime = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
+
+        Ok(datetime.and_utc().timestamp_millis())
+    }
+
+    /// Get output path or generate default
+    fn get_output_path(&self) -> PathBuf {
+        self.output.clone().unwrap_or_else(|| {
+            PathBuf::from(format!("{}_{}.csv", self.symbol.to_lowercase(), self.interval))
+        })
+    }
+
+    /// Execute bars download (T086-T087)
+    pub async fn execute(&self, cli: &Cli) -> Result<(), CliError> {
+        let start_time = self.parse_start_time()?;
+        let end_time = self.parse_end_time()?;
+        let output_path = self.get_output_path();
+
+        let interval = Interval::from_str(&self.interval)
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {}", e)))?;
+
+        // Create download job
+        let job = DownloadJob::new(
+            self.identifier.clone(),
+            self.symbol.clone(),
+            interval,
+            start_time,
+            end_time,
+            output_path.clone(),
+        );
+
+        // Create executor
+        let executor = if cli.resume {
+            let resume_dir = cli
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
+        } else {
+            DownloadExecutor::new()
+        };
+
+        // Create progress bar (T087)
+        let progress = create_progress_bar(&job);
+
+        // Execute download
+        info!(
+            "Starting download: {} {} from {} to {}",
+            self.symbol, self.interval, self.start_time, self.end_time
+        );
+
+        let result = executor.execute_bars_job(job.clone()).await;
+
+        progress.finish_and_clear();
+
+        // Format output (T086)
+        match cli.output_format {
+            OutputFormat::Json => {
+                output_json_result(&job, &result);
+            }
+            OutputFormat::Human => {
+                output_human_result(&job, &result);
+            }
+        }
+
+        result.map(|_| ()).map_err(CliError::DownloadError)
+    }
+}
+
+impl AggTradesArgs {
+    /// Parse start time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
+    fn parse_start_time(&self) -> Result<i64, CliError> {
+        // Try parsing as full datetime first
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.start_time)) {
+            return Ok(dt.timestamp_millis());
+        }
+
+        // Fall back to date-only format
+        let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {}", e)))?;
+
+        let datetime = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| CliError::InvalidArgument("Invalid start time".to_string()))?;
+
+        Ok(datetime.and_utc().timestamp_millis())
+    }
+
+    /// Parse end time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
+    fn parse_end_time(&self) -> Result<i64, CliError> {
+        // Try parsing as full datetime first
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.end_time)) {
+            return Ok(dt.timestamp_millis());
+        }
+
+        // Fall back to date-only format
+        let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {}", e)))?;
+
+        let datetime = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
+
+        Ok(datetime.and_utc().timestamp_millis())
+    }
+
+    /// Get output path or generate default
+    fn get_output_path(&self) -> PathBuf {
+        self.output.clone().unwrap_or_else(|| {
+            PathBuf::from(format!("{}_trades.csv", self.symbol.to_lowercase()))
+        })
+    }
+
+    /// Execute aggTrades download (T129)
+    pub async fn execute(&self, cli: &Cli) -> Result<(), CliError> {
+        let start_time = self.parse_start_time()?;
+        let end_time = self.parse_end_time()?;
+        let output_path = self.get_output_path();
+
+        // Create download job
+        let job = DownloadJob::new_aggtrades(
+            self.identifier.clone(),
+            self.symbol.clone(),
+            start_time,
+            end_time,
+            output_path.clone(),
+        );
+
+        // Create executor
+        let executor = if cli.resume {
+            let resume_dir = cli
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
+        } else {
+            DownloadExecutor::new()
+        };
+
+        // Create progress bar
+        let progress = ProgressBar::new_spinner();
+        progress.set_message(format!("Downloading {} aggTrades", self.symbol));
+
+        // Execute download
+        info!(
+            "Starting aggTrades download: {} from {} to {}",
+            self.symbol, self.start_time, self.end_time
+        );
+
+        let result = executor.execute_aggtrades_job(job.clone()).await;
+
+        progress.finish_and_clear();
+
+        // Format output
+        match cli.output_format {
+            OutputFormat::Json => {
+                output_aggtrades_json_result(&job, &result);
+            }
+            OutputFormat::Human => {
+                output_aggtrades_human_result(&job, &result);
+            }
+        }
+
+        result.map(|_| ()).map_err(CliError::DownloadError)
+    }
+}
+
+/// Create progress bar with style (T087)
+fn create_progress_bar(job: &DownloadJob) -> ProgressBar {
+    let (total_bars, message) = match job.job_type {
+        crate::downloader::JobType::Bars { interval } => {
+            let interval_ms = interval.to_milliseconds();
+            let total_duration = job.end_time - job.start_time;
+            let total_bars = ((total_duration + interval_ms - 1) / interval_ms) as u64;
+            (total_bars, format!("Downloading {} {}", job.symbol, interval))
+        }
+        _ => (0, format!("Downloading {}", job.symbol)),
+    };
+
+    let pb = ProgressBar::new(total_bars);
+    pb.set_style(
+        ProgressStyle::default_bar()
+            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+            .expect("Failed to create progress style")
+            .progress_chars("#>-"),
+    );
+    pb.set_message(message);
+    pb
+}
+
+/// Output result as JSON (T086)
+fn output_json_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+    let interval_str = match job.job_type {
+        crate::downloader::JobType::Bars { interval } => interval.to_string(),
+        _ => "N/A".to_string(),
+    };
+
+    let output = match result {
+        Ok(progress) => DownloadResult {
+            success: true,
+            identifier: job.identifier.clone(),
+            symbol: job.symbol.clone(),
+            interval: interval_str,
+            start_time: job.start_time,
+            end_time: job.end_time,
+            output_path: job.output_path.display().to_string(),
+            bars_downloaded: progress.downloaded_bars,
+            bars_written: progress.written_bars,
+            api_requests: progress.api_requests,
+            retries: progress.retries,
+            error: None,
+        },
+        Err(e) => DownloadResult {
+            success: false,
+            identifier: job.identifier.clone(),
+            symbol: job.symbol.clone(),
+            interval: interval_str,
+            start_time: job.start_time,
+            end_time: job.end_time,
+            output_path: job.output_path.display().to_string(),
+            bars_downloaded: 0,
+            bars_written: 0,
+            api_requests: 0,
+            retries: 0,
+            error: Some(e.to_string()),
+        },
+    };
+
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+/// Output result in human-readable format (T086)
+fn output_human_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+    match result {
+        Ok(progress) => {
+            println!("\nDownload completed successfully!");
+            if let crate::downloader::JobType::Bars { interval } = job.job_type {
+                println!("Symbol: {} {}", job.symbol, interval);
+            }
+            println!("Output: {}", job.output_path.display());
+            println!("Bars downloaded: {}", progress.downloaded_bars);
+            println!("Bars written: {}", progress.written_bars);
+            if progress.retries > 0 {
+                println!("Retries: {}", progress.retries);
+            }
+        }
+        Err(e) => {
+            eprintln!("\nDownload failed!");
+            eprintln!("Error: {}", e);
+            error!("Download failed: {}", e);
+        }
+    }
+}
+
+/// Output aggTrades result as JSON
+fn output_aggtrades_json_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+    let output = match result {
+        Ok(progress) => serde_json::json!({
+            "success": true,
+            "identifier": job.identifier,
+            "symbol": job.symbol,
+            "data_type": "aggtrades",
+            "start_time": job.start_time,
+            "end_time": job.end_time,
+            "output_path": job.output_path.display().to_string(),
+            "trades_downloaded": progress.downloaded_bars,
+            "trades_written": progress.written_bars,
+            "api_requests": progress.api_requests,
+            "retries": progress.retries,
+            "error": null,
+        }),
+        Err(e) => serde_json::json!({
+            "success": false,
+            "identifier": job.identifier,
+            "symbol": job.symbol,
+            "data_type": "aggtrades",
+            "start_time": job.start_time,
+            "end_time": job.end_time,
+            "output_path": job.output_path.display().to_string(),
+            "trades_downloaded": 0,
+            "trades_written": 0,
+            "api_requests": 0,
+            "retries": 0,
+            "error": e.to_string(),
+        }),
+    };
+
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+/// Output aggTrades result in human-readable format
+fn output_aggtrades_human_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+    match result {
+        Ok(progress) => {
+            println!("\nAggTrades download completed successfully!");
+            println!("Symbol: {}", job.symbol);
+            println!("Output: {}", job.output_path.display());
+            println!("Trades downloaded: {}", progress.downloaded_bars);
+            println!("Trades written: {}", progress.written_bars);
+            if progress.retries > 0 {
+                println!("Retries: {}", progress.retries);
+            }
+        }
+        Err(e) => {
+            eprintln!("\nAggTrades download failed!");
+            eprintln!("Error: {}", e);
+            error!("Download failed: {}", e);
+        }
+    }
+}
+
+impl FundingArgs {
+    /// Parse start time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
+    fn parse_start_time(&self) -> Result<i64, CliError> {
+        // Try parsing as full datetime first
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.start_time)) {
+            return Ok(dt.timestamp_millis());
+        }
+
+        // Fall back to date-only format
+        let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {}", e)))?;
+
+        let datetime = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| CliError::InvalidArgument("Invalid start time".to_string()))?;
+
+        Ok(datetime.and_utc().timestamp_millis())
+    }
+
+    /// Parse end time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
+    fn parse_end_time(&self) -> Result<i64, CliError> {
+        // Try parsing as full datetime first
+        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.end_time)) {
+            return Ok(dt.timestamp_millis());
+        }
+
+        // Fall back to date-only format
+        let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {}", e)))?;
+
+        let datetime = date
+            .and_hms_opt(0, 0, 0)
+            .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
+
+        Ok(datetime.and_utc().timestamp_millis())
+    }
+
+    /// Get output path or generate default
+    fn get_output_path(&self) -> PathBuf {
+        self.output.clone().unwrap_or_else(|| {
+            PathBuf::from(format!("{}_funding.csv", self.symbol.to_lowercase()))
+        })
+    }
+
+    /// Execute funding rates download (T151)
+    pub async fn execute(&self, cli: &Cli) -> Result<(), CliError> {
+        let start_time = self.parse_start_time()?;
+        let end_time = self.parse_end_time()?;
+        let output_path = self.get_output_path();
+
+        // Create download job
+        let job = DownloadJob::new_funding(
+            self.identifier.clone(),
+            self.symbol.clone(),
+            start_time,
+            end_time,
+            output_path.clone(),
+        );
+
+        // Create executor
+        let executor = if cli.resume {
+            let resume_dir = cli
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
+        } else {
+            DownloadExecutor::new()
+        };
+
+        // Create progress bar
+        let progress = ProgressBar::new_spinner();
+        progress.set_message(format!("Downloading {} funding rates", self.symbol));
+
+        // Execute download
+        info!(
+            "Starting funding rates download: {} from {} to {}",
+            self.symbol, self.start_time, self.end_time
+        );
+
+        let result = executor.execute_funding_job(job.clone()).await;
+
+        progress.finish_and_clear();
+
+        // Format output
+        match cli.output_format {
+            OutputFormat::Json => {
+                output_funding_json_result(&job, &result);
+            }
+            OutputFormat::Human => {
+                output_funding_human_result(&job, &result);
+            }
+        }
+
+        result.map(|_| ()).map_err(CliError::DownloadError)
+    }
+}
+
+/// Output funding result as JSON
+fn output_funding_json_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+    let output = match result {
+        Ok(progress) => serde_json::json!({
+            "success": true,
+            "identifier": job.identifier,
+            "symbol": job.symbol,
+            "data_type": "funding",
+            "start_time": job.start_time,
+            "end_time": job.end_time,
+            "output_path": job.output_path.display().to_string(),
+            "rates_downloaded": progress.downloaded_bars,
+            "rates_written": progress.written_bars,
+            "api_requests": progress.api_requests,
+            "retries": progress.retries,
+            "error": null,
+        }),
+        Err(e) => serde_json::json!({
+            "success": false,
+            "identifier": job.identifier,
+            "symbol": job.symbol,
+            "data_type": "funding",
+            "start_time": job.start_time,
+            "end_time": job.end_time,
+            "output_path": job.output_path.display().to_string(),
+            "rates_downloaded": 0,
+            "rates_written": 0,
+            "api_requests": 0,
+            "retries": 0,
+            "error": e.to_string(),
+        }),
+    };
+
+    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+}
+
+/// Output funding result in human-readable format
+fn output_funding_human_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+    match result {
+        Ok(progress) => {
+            println!("\nFunding rates download completed successfully!");
+            println!("Symbol: {}", job.symbol);
+            println!("Output: {}", job.output_path.display());
+            println!("Rates downloaded: {}", progress.downloaded_bars);
+            println!("Rates written: {}", progress.written_bars);
+            if progress.retries > 0 {
+                println!("Retries: {}", progress.retries);
+            }
+        }
+        Err(e) => {
+            eprintln!("\nFunding rates download failed!");
+            eprintln!("Error: {}", e);
+            error!("Download failed: {}", e);
+        }
+    }
+}

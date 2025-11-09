@@ -1,0 +1,102 @@
+{
+  "schema_version": "1.0.0",
+  "last_updated": "2025-11-07T00:00:00Z",
+  "identifiers": [
+    {
+      "canonical": "BINANCE:BTC/USDT:USDT",
+      "exchange": "BINANCE",
+      "base": "BTC",
+      "quote": "USDT",
+      "settle": "USDT",
+      "description": "Bitcoin perpetual futures settled in USDT on Binance",
+      "capabilities": {
+        "data_types": ["bars", "aggtrades", "funding"],
+        "intervals": [
+          "1m", "3m", "5m", "15m", "30m",
+          "1h", "2h", "4h", "6h", "8h", "12h",
+          "1d", "3d", "1w", "1M"
+        ],
+        "archive_support": true,
+        "live_api_support": true,
+        "historical_limit_days": 365
+      },
+      "validation_rules": {
+        "symbol_pattern": "^[A-Z0-9]{1,20}$",
+        "interval_pattern": "^\\d+[mhdwM]$",
+        "min_date": "2019-09-08T00:00:00Z"
+      }
+    },
+    {
+      "canonical": "BINANCE:ETH/USDT:USDT",
+      "exchange": "BINANCE",
+      "base": "ETH",
+      "quote": "USDT",
+      "settle": "USDT",
+      "description": "Ethereum perpetual futures settled in USDT on Binance",
+      "capabilities": {
+        "data_types": ["bars", "aggtrades", "funding"],
+        "intervals": [
+          "1m", "3m", "5m", "15m", "30m",
+          "1h", "2h", "4h", "6h", "8h", "12h",
+          "1d", "3d", "1w", "1M"
+        ],
+        "archive_support": true,
+        "live_api_support": true,
+        "historical_limit_days": 365
+      },
+      "validation_rules": {
+        "symbol_pattern": "^[A-Z0-9]{1,20}$",
+        "interval_pattern": "^\\d+[mhdwM]$",
+        "min_date": "2019-09-08T00:00:00Z"
+      }
+    },
+    {
+      "canonical": "BINANCE:BTC/USD:BTC",
+      "exchange": "BINANCE",
+      "base": "BTC",
+      "quote": "USD",
+      "settle": "BTC",
+      "description": "Bitcoin perpetual futures settled in BTC (inverse/coin-margined) on Binance",
+      "capabilities": {
+        "data_types": ["bars", "aggtrades", "funding"],
+        "intervals": [
+          "1m", "3m", "5m", "15m", "30m",
+          "1h", "2h", "4h", "6h", "8h", "12h",
+          "1d", "3d", "1w", "1M"
+        ],
+        "archive_support": true,
+        "live_api_support": true,
+        "historical_limit_days": 365
+      },
+      "validation_rules": {
+        "symbol_pattern": "^[A-Z0-9]{1,20}$",
+        "interval_pattern": "^\\d+[mhdwM]$",
+        "min_date": "2020-05-01T00:00:00Z"
+      }
+    },
+    {
+      "canonical": "BINANCE:ETH/USD:ETH",
+      "exchange": "BINANCE",
+      "base": "ETH",
+      "quote": "USD",
+      "settle": "ETH",
+      "description": "Ethereum perpetual futures settled in ETH (inverse/coin-margined) on Binance",
+      "capabilities": {
+        "data_types": ["bars", "aggtrades", "funding"],
+        "intervals": [
+          "1m", "3m", "5m", "15m", "30m",
+          "1h", "2h", "4h", "6h", "8h", "12h",
+          "1d", "3d", "1w", "1M"
+        ],
+        "archive_support": true,
+        "live_api_support": true,
+        "historical_limit_days": 365
+      },
+      "validation_rules": {
+        "symbol_pattern": "^[A-Z0-9]{1,20}$",
+        "interval_pattern": "^\\d+[mhdwM]$",
+        "min_date": "2020-05-01T00:00:00Z"
+      }
+    }
+  ]
+}
