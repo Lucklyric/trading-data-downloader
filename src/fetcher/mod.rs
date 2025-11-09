@@ -7,6 +7,7 @@ use futures_util::Stream;
 use std::pin::Pin;
 
 pub mod archive;
+pub mod binance_config;
 pub mod binance_futures_coin;
 pub mod binance_futures_usdt;
 pub mod binance_http;
