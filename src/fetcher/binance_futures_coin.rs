@@ -7,15 +7,15 @@ use reqwest::Client;
 use rust_decimal::Decimal;
 use serde_json::Value;
 use std::str::FromStr;
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
+use super::binance_config::COIN_FUTURES_CONFIG;
+use super::binance_http::BinanceHttpClient;
+use super::binance_parser::BinanceParser;
 use super::{AggTradeStream, BarStream, DataFetcher, FetcherError, FetcherResult, FundingStream};
+use crate::downloader::rate_limit::RateLimiter;
 
-const BINANCE_DAPI_BASE_URL: &str = "https://dapi.binance.com";
-const KLINES_ENDPOINT: &str = "/dapi/v1/klines";
-const EXCHANGE_INFO_ENDPOINT: &str = "/dapi/v1/exchangeInfo";
-const AGGTRADES_ENDPOINT: &str = "/dapi/v1/aggTrades";
-const FUNDING_RATE_ENDPOINT: &str = "/dapi/v1/fundingRate";
 const MAX_LIMIT: usize = 1500; // Binance API limit per klines request
 const AGGTRADES_LIMIT: usize = 1000; // Max aggTrades per request
 const ONE_HOUR_MS: i64 = 60 * 60 * 1000; // 1 hour in milliseconds (aggTrades API constraint)
@@ -23,142 +23,41 @@ const FUNDING_RATE_LIMIT: usize = 1000; // Max funding rates per request
 
 /// Binance Futures COIN-margined data fetcher (T157)
 pub struct BinanceFuturesCoinFetcher {
-    client: Client,
-    base_url: String,
+    http_client: BinanceHttpClient,
 }
 
 impl BinanceFuturesCoinFetcher {
     /// Create a new Binance Futures COIN-margined fetcher
     pub fn new() -> Self {
+        let client = Client::new();
+        let rate_limiter = Arc::new(RateLimiter::weight_based(
+            2400,
+            std::time::Duration::from_secs(60),
+        ));
+        let http_client = BinanceHttpClient::new(
+            client,
+            COIN_FUTURES_CONFIG.base_url,
+            rate_limiter,
+        );
+
         Self {
-            client: Client::new(),
-            base_url: BINANCE_DAPI_BASE_URL.to_string(),
+            http_client,
         }
     }
 
     /// Create with custom base URL (for testing)
     #[allow(dead_code)]
     pub fn new_with_base_url(base_url: String) -> Self {
+        let client = Client::new();
+        let rate_limiter = Arc::new(RateLimiter::weight_based(
+            2400,
+            std::time::Duration::from_secs(60),
+        ));
+        let http_client = BinanceHttpClient::new(client, base_url, rate_limiter);
+
         Self {
-            client: Client::new(),
-            base_url,
+            http_client,
         }
-    }
-
-    /// Parse a single kline array from API response (T160)
-    fn parse_kline(kline: &Value) -> FetcherResult<Bar> {
-        let arr = kline
-            .as_array()
-            .ok_or_else(|| FetcherError::ParseError("Kline is not an array".to_string()))?;
-
-        if arr.len() != 12 {
-            return Err(FetcherError::ParseError(format!(
-                "Expected 12 elements in kline, got {}",
-                arr.len()
-            )));
-        }
-
-        let open_time = arr[0]
-            .as_i64()
-            .ok_or_else(|| FetcherError::ParseError("Invalid open_time".to_string()))?;
-
-        let close_time = arr[6]
-            .as_i64()
-            .ok_or_else(|| FetcherError::ParseError("Invalid close_time".to_string()))?;
-
-        let trades = arr[8]
-            .as_u64()
-            .ok_or_else(|| FetcherError::ParseError("Invalid trades count".to_string()))?;
-
-        // Parse decimal values from strings
-        let open = Self::parse_decimal(&arr[1], "open")?;
-        let high = Self::parse_decimal(&arr[2], "high")?;
-        let low = Self::parse_decimal(&arr[3], "low")?;
-        let close = Self::parse_decimal(&arr[4], "close")?;
-        let volume = Self::parse_decimal(&arr[5], "volume")?;
-        let quote_volume = Self::parse_decimal(&arr[7], "quote_volume")?;
-        let taker_buy_base_volume = Self::parse_decimal(&arr[9], "taker_buy_base_volume")?;
-        let taker_buy_quote_volume = Self::parse_decimal(&arr[10], "taker_buy_quote_volume")?;
-
-        Ok(Bar {
-            open_time,
-            open,
-            high,
-            low,
-            close,
-            volume,
-            close_time,
-            quote_volume,
-            trades,
-            taker_buy_base_volume,
-            taker_buy_quote_volume,
-        })
-    }
-
-    /// Helper to parse decimal from JSON value
-    fn parse_decimal(value: &Value, field_name: &str) -> FetcherResult<Decimal> {
-        let s = value
-            .as_str()
-            .ok_or_else(|| FetcherError::ParseError(format!("{} is not a string", field_name)))?;
-
-        Decimal::from_str(s).map_err(|e| {
-            FetcherError::ParseError(format!("Failed to parse {}: {}", field_name, e))
-        })
-    }
-
-    /// Parse a single aggTrade object from API response (T161)
-    fn parse_aggtrade(trade: &Value) -> FetcherResult<AggTrade> {
-        // Field 'a': Aggregate trade ID
-        let agg_trade_id = trade
-            .get("a")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| FetcherError::ParseError("Invalid or missing agg_trade_id (a)".to_string()))?;
-
-        // Field 'p': Price (string)
-        let price = Self::parse_decimal(
-            trade.get("p").ok_or_else(|| FetcherError::ParseError("Missing price (p)".to_string()))?,
-            "price"
-        )?;
-
-        // Field 'q': Quantity (string)
-        let quantity = Self::parse_decimal(
-            trade.get("q").ok_or_else(|| FetcherError::ParseError("Missing quantity (q)".to_string()))?,
-            "quantity"
-        )?;
-
-        // Field 'f': First trade ID
-        let first_trade_id = trade
-            .get("f")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| FetcherError::ParseError("Invalid or missing first_trade_id (f)".to_string()))?;
-
-        // Field 'l': Last trade ID
-        let last_trade_id = trade
-            .get("l")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| FetcherError::ParseError("Invalid or missing last_trade_id (l)".to_string()))?;
-
-        // Field 'T': Timestamp (integer, milliseconds)
-        let timestamp = trade
-            .get("T")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| FetcherError::ParseError("Invalid or missing timestamp (T)".to_string()))?;
-
-        // Field 'm': Is buyer maker (boolean)
-        let is_buyer_maker = trade
-            .get("m")
-            .and_then(|v| v.as_bool())
-            .ok_or_else(|| FetcherError::ParseError("Invalid or missing is_buyer_maker (m)".to_string()))?;
-
-        Ok(AggTrade {
-            agg_trade_id,
-            price,
-            quantity,
-            first_trade_id,
-            last_trade_id,
-            timestamp,
-            is_buyer_maker,
-        })
     }
 
     /// Parse a symbol from exchangeInfo response (T159)
@@ -275,38 +174,13 @@ impl BinanceFuturesCoinFetcher {
 
     /// Fetch and parse exchangeInfo (T158, T159)
     async fn fetch_exchange_info(&self) -> FetcherResult<Vec<Symbol>> {
-        let url = format!("{}{}", self.base_url, EXCHANGE_INFO_ENDPOINT);
+        debug!("Fetching exchange info");
 
-        debug!("Fetching exchange info from {}", url);
-
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| FetcherError::NetworkError(e.to_string()))?;
-
-        // Check for rate limiting
-        if response.status().as_u16() == 429 {
-            return Err(FetcherError::RateLimitExceeded);
-        }
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(FetcherError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
-        }
-
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|e| FetcherError::ParseError(e.to_string()))?;
+        let params: Vec<(&str, String)> = vec![];
+        let body: Value = self
+            .http_client
+            .get(COIN_FUTURES_CONFIG.exchange_info_endpoint, &params)
+            .await?;
 
         let symbols_array = body
             .get("symbols")
@@ -345,58 +219,25 @@ impl BinanceFuturesCoinFetcher {
         end_time: i64,
         limit: usize,
     ) -> FetcherResult<Vec<Bar>> {
-        let url = format!("{}{}", self.base_url, KLINES_ENDPOINT);
-
         debug!(
             "Fetching klines: symbol={}, interval={}, start={}, end={}, limit={}",
             symbol, interval, start_time, end_time, limit
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .query(&[
-                ("symbol", symbol),
-                ("interval", interval),
-                ("startTime", &start_time.to_string()),
-                ("endTime", &end_time.to_string()),
-                ("limit", &limit.to_string()),
-            ])
-            .send()
-            .await
-            .map_err(|e| FetcherError::NetworkError(e.to_string()))?;
+        let params = [
+            ("symbol", symbol.to_string()),
+            ("interval", interval.to_string()),
+            ("startTime", start_time.to_string()),
+            ("endTime", end_time.to_string()),
+            ("limit", limit.to_string()),
+        ];
 
-        // Check for rate limiting
-        if response.status().as_u16() == 429 {
-            return Err(FetcherError::RateLimitExceeded);
-        }
+        let klines: Vec<Value> = self
+            .http_client
+            .get(COIN_FUTURES_CONFIG.klines_endpoint, &params)
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(FetcherError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
-        }
-
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|e| FetcherError::ParseError(e.to_string()))?;
-
-        let klines = body
-            .as_array()
-            .ok_or_else(|| FetcherError::InvalidResponse("Response is not an array".to_string()))?;
-
-        let mut bars = Vec::with_capacity(klines.len());
-        for kline in klines {
-            let bar = Self::parse_kline(kline)?;
-            bars.push(bar);
-        }
+        let bars = BinanceParser::parse_klines(klines)?;
 
         debug!("Fetched {} bars", bars.len());
         Ok(bars)
@@ -412,14 +253,12 @@ impl BinanceFuturesCoinFetcher {
         end_time: i64,
         from_id: Option<i64>,
     ) -> FetcherResult<Vec<AggTrade>> {
-        let url = format!("{}{}", self.base_url, AGGTRADES_ENDPOINT);
-
         debug!(
             "Fetching aggTrades: symbol={}, start={}, end={}, from_id={:?}",
             symbol, start_time, end_time, from_id
         );
 
-        let mut query_params = vec![
+        let mut params = vec![
             ("symbol", symbol.to_string()),
             ("startTime", start_time.to_string()),
             ("endTime", end_time.to_string()),
@@ -428,48 +267,15 @@ impl BinanceFuturesCoinFetcher {
 
         // If from_id is provided, use it for pagination (takes precedence over time-based)
         if let Some(id) = from_id {
-            query_params.push(("fromId", id.to_string()));
+            params.push(("fromId", id.to_string()));
         }
 
-        let response = self
-            .client
-            .get(&url)
-            .query(&query_params)
-            .send()
-            .await
-            .map_err(|e| FetcherError::NetworkError(e.to_string()))?;
+        let trades_json: Vec<Value> = self
+            .http_client
+            .get(COIN_FUTURES_CONFIG.aggtrades_endpoint, &params)
+            .await?;
 
-        // Check for rate limiting
-        if response.status().as_u16() == 429 {
-            return Err(FetcherError::RateLimitExceeded);
-        }
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(FetcherError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
-        }
-
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|e| FetcherError::ParseError(e.to_string()))?;
-
-        let trades_array = body
-            .as_array()
-            .ok_or_else(|| FetcherError::InvalidResponse("Response is not an array".to_string()))?;
-
-        let mut trades = Vec::with_capacity(trades_array.len());
-        for trade_data in trades_array {
-            let trade = Self::parse_aggtrade(trade_data)?;
-            trades.push(trade);
-        }
+        let trades = BinanceParser::parse_aggtrades(trades_json)?;
 
         debug!("Fetched {} aggTrades", trades.len());
         Ok(trades)
@@ -481,33 +287,6 @@ impl BinanceFuturesCoinFetcher {
         ((duration + interval_ms - 1) / interval_ms) as u64 // Round up
     }
 
-    /// Parse a single funding rate from API response (T162)
-    fn parse_funding_rate(rate_data: &Value) -> FetcherResult<FundingRate> {
-        let symbol = rate_data
-            .get("symbol")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| FetcherError::ParseError("Missing or invalid symbol".to_string()))?
-            .to_string();
-
-        let funding_rate = Self::parse_decimal(
-            rate_data
-                .get("fundingRate")
-                .ok_or_else(|| FetcherError::ParseError("Missing fundingRate".to_string()))?,
-            "fundingRate",
-        )?;
-
-        let funding_time = rate_data
-            .get("fundingTime")
-            .and_then(|v| v.as_i64())
-            .ok_or_else(|| FetcherError::ParseError("Missing or invalid fundingTime".to_string()))?;
-
-        Ok(FundingRate {
-            symbol,
-            funding_rate,
-            funding_time,
-        })
-    }
-
     /// Fetch funding rates for a time range (T162)
     /// Returns funding rates that fall within [start_time, end_time)
     async fn fetch_funding_batch(
@@ -517,57 +296,24 @@ impl BinanceFuturesCoinFetcher {
         end_time: i64,
         limit: usize,
     ) -> FetcherResult<Vec<FundingRate>> {
-        let url = format!("{}{}", self.base_url, FUNDING_RATE_ENDPOINT);
-
         debug!(
             "Fetching funding rates: symbol={}, start={}, end={}, limit={}",
             symbol, start_time, end_time, limit
         );
 
-        let response = self
-            .client
-            .get(&url)
-            .query(&[
-                ("symbol", symbol),
-                ("startTime", &start_time.to_string()),
-                ("endTime", &end_time.to_string()),
-                ("limit", &limit.to_string()),
-            ])
-            .send()
-            .await
-            .map_err(|e| FetcherError::NetworkError(e.to_string()))?;
+        let params = [
+            ("symbol", symbol.to_string()),
+            ("startTime", start_time.to_string()),
+            ("endTime", end_time.to_string()),
+            ("limit", limit.to_string()),
+        ];
 
-        // Check for rate limiting
-        if response.status().as_u16() == 429 {
-            return Err(FetcherError::RateLimitExceeded);
-        }
+        let rates_json: Vec<Value> = self
+            .http_client
+            .get(COIN_FUTURES_CONFIG.funding_endpoint, &params)
+            .await?;
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(FetcherError::ApiError(format!(
-                "HTTP {}: {}",
-                status, error_text
-            )));
-        }
-
-        let body: Value = response
-            .json()
-            .await
-            .map_err(|e| FetcherError::ParseError(e.to_string()))?;
-
-        let rates = body
-            .as_array()
-            .ok_or_else(|| FetcherError::InvalidResponse("Response is not an array".to_string()))?;
-
-        let mut funding_rates = Vec::with_capacity(rates.len());
-        for rate_data in rates {
-            let rate = Self::parse_funding_rate(rate_data)?;
-            funding_rates.push(rate);
-        }
+        let funding_rates = BinanceParser::parse_funding_rates(rates_json)?;
 
         debug!("Fetched {} funding rates", funding_rates.len());
         Ok(funding_rates)
@@ -798,9 +544,20 @@ impl BinanceFuturesCoinFetcher {
 
 impl Clone for BinanceFuturesCoinFetcher {
     fn clone(&self) -> Self {
+        // Create new client and rate limiter for the clone
+        let client = Client::new();
+        let rate_limiter = Arc::new(RateLimiter::weight_based(
+            2400,
+            std::time::Duration::from_secs(60),
+        ));
+        let http_client = BinanceHttpClient::new(
+            client,
+            COIN_FUTURES_CONFIG.base_url,
+            rate_limiter,
+        );
+
         Self {
-            client: Client::new(),
-            base_url: self.base_url.clone(),
+            http_client,
         }
     }
 }
@@ -881,7 +638,7 @@ impl DataFetcher for BinanceFuturesCoinFetcher {
     }
 
     fn base_url(&self) -> &str {
-        &self.base_url
+        COIN_FUTURES_CONFIG.base_url
     }
 }
 
@@ -907,7 +664,8 @@ mod tests {
             "0"
         ]);
 
-        let bar = BinanceFuturesCoinFetcher::parse_kline(&kline_json).unwrap();
+        let bars = BinanceParser::parse_klines(vec![kline_json]).unwrap();
+        let bar = &bars[0];
 
         assert_eq!(bar.open_time, 1699920000000);
         assert_eq!(bar.close_time, 1699920059999);
