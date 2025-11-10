@@ -538,3 +538,198 @@ impl FundingRate {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_interval_from_str() {
+        assert_eq!(Interval::from_str("1m").unwrap(), Interval::OneMinute);
+        assert_eq!(Interval::from_str("3m").unwrap(), Interval::ThreeMinutes);
+        assert_eq!(Interval::from_str("5m").unwrap(), Interval::FiveMinutes);
+        assert_eq!(Interval::from_str("15m").unwrap(), Interval::FifteenMinutes);
+        assert_eq!(Interval::from_str("30m").unwrap(), Interval::ThirtyMinutes);
+        assert_eq!(Interval::from_str("1h").unwrap(), Interval::OneHour);
+        assert_eq!(Interval::from_str("2h").unwrap(), Interval::TwoHours);
+        assert_eq!(Interval::from_str("4h").unwrap(), Interval::FourHours);
+        assert_eq!(Interval::from_str("6h").unwrap(), Interval::SixHours);
+        assert_eq!(Interval::from_str("8h").unwrap(), Interval::EightHours);
+        assert_eq!(Interval::from_str("12h").unwrap(), Interval::TwelveHours);
+        assert_eq!(Interval::from_str("1d").unwrap(), Interval::OneDay);
+        assert_eq!(Interval::from_str("3d").unwrap(), Interval::ThreeDays);
+        assert_eq!(Interval::from_str("1w").unwrap(), Interval::OneWeek);
+        assert_eq!(Interval::from_str("1M").unwrap(), Interval::OneMonth);
+    }
+
+    #[test]
+    fn test_interval_from_str_invalid() {
+        assert!(Interval::from_str("2m").is_err());
+        assert!(Interval::from_str("10h").is_err());
+        assert!(Interval::from_str("invalid").is_err());
+        assert!(Interval::from_str("").is_err());
+    }
+
+    #[test]
+    fn test_interval_to_string() {
+        assert_eq!(Interval::OneMinute.to_string(), "1m");
+        assert_eq!(Interval::ThreeMinutes.to_string(), "3m");
+        assert_eq!(Interval::FiveMinutes.to_string(), "5m");
+        assert_eq!(Interval::FifteenMinutes.to_string(), "15m");
+        assert_eq!(Interval::ThirtyMinutes.to_string(), "30m");
+        assert_eq!(Interval::OneHour.to_string(), "1h");
+        assert_eq!(Interval::TwoHours.to_string(), "2h");
+        assert_eq!(Interval::FourHours.to_string(), "4h");
+        assert_eq!(Interval::SixHours.to_string(), "6h");
+        assert_eq!(Interval::EightHours.to_string(), "8h");
+        assert_eq!(Interval::TwelveHours.to_string(), "12h");
+        assert_eq!(Interval::OneDay.to_string(), "1d");
+        assert_eq!(Interval::ThreeDays.to_string(), "3d");
+        assert_eq!(Interval::OneWeek.to_string(), "1w");
+        assert_eq!(Interval::OneMonth.to_string(), "1M");
+    }
+
+    #[test]
+    fn test_interval_to_milliseconds() {
+        assert_eq!(Interval::OneMinute.to_milliseconds(), 60_000);
+        assert_eq!(Interval::ThreeMinutes.to_milliseconds(), 180_000);
+        assert_eq!(Interval::FiveMinutes.to_milliseconds(), 300_000);
+        assert_eq!(Interval::FifteenMinutes.to_milliseconds(), 900_000);
+        assert_eq!(Interval::ThirtyMinutes.to_milliseconds(), 1_800_000);
+        assert_eq!(Interval::OneHour.to_milliseconds(), 3_600_000);
+        assert_eq!(Interval::TwoHours.to_milliseconds(), 7_200_000);
+        assert_eq!(Interval::FourHours.to_milliseconds(), 14_400_000);
+        assert_eq!(Interval::SixHours.to_milliseconds(), 21_600_000);
+        assert_eq!(Interval::EightHours.to_milliseconds(), 28_800_000);
+        assert_eq!(Interval::TwelveHours.to_milliseconds(), 43_200_000);
+        assert_eq!(Interval::OneDay.to_milliseconds(), 86_400_000);
+        assert_eq!(Interval::ThreeDays.to_milliseconds(), 259_200_000);
+        assert_eq!(Interval::OneWeek.to_milliseconds(), 604_800_000);
+        assert_eq!(Interval::OneMonth.to_milliseconds(), 2_592_000_000);
+    }
+
+    #[test]
+    fn test_interval_round_trip() {
+        let intervals = vec![
+            Interval::OneMinute,
+            Interval::ThreeMinutes,
+            Interval::FiveMinutes,
+            Interval::FifteenMinutes,
+            Interval::ThirtyMinutes,
+            Interval::OneHour,
+            Interval::TwoHours,
+            Interval::FourHours,
+            Interval::SixHours,
+            Interval::EightHours,
+            Interval::TwelveHours,
+            Interval::OneDay,
+            Interval::ThreeDays,
+            Interval::OneWeek,
+            Interval::OneMonth,
+        ];
+
+        for interval in intervals {
+            let string = interval.to_string();
+            let parsed = Interval::from_str(&string).unwrap();
+            assert_eq!(parsed, interval);
+        }
+    }
+
+    #[test]
+    fn test_bar_validate() {
+        let mut bar = Bar {
+            open_time: 1699920000000,
+            open: Decimal::from_str("35000.50").unwrap(),
+            high: Decimal::from_str("35100.00").unwrap(),
+            low: Decimal::from_str("34950.00").unwrap(),
+            close: Decimal::from_str("35050.75").unwrap(),
+            volume: Decimal::from_str("1234.567").unwrap(),
+            close_time: 1699920059999,
+            quote_volume: Decimal::from_str("43210987.65").unwrap(),
+            trades: 5432,
+            taker_buy_base_volume: Decimal::from_str("617.283").unwrap(),
+            taker_buy_quote_volume: Decimal::from_str("21605493.82").unwrap(),
+        };
+
+        assert!(bar.validate().is_ok());
+
+        // Test invalid close_time
+        let original_close_time = bar.close_time;
+        bar.close_time = bar.open_time - 1;
+        assert!(bar.validate().is_err());
+        bar.close_time = original_close_time;
+
+        // Test invalid high
+        bar.high = Decimal::from_str("34900.00").unwrap();
+        assert!(bar.validate().is_err());
+        bar.high = Decimal::from_str("35100.00").unwrap();
+
+        // Test invalid low
+        bar.low = Decimal::from_str("35200.00").unwrap();
+        assert!(bar.validate().is_err());
+        bar.low = Decimal::from_str("34950.00").unwrap();
+
+        // Test negative volume
+        bar.volume = Decimal::from_str("-100.0").unwrap();
+        assert!(bar.validate().is_err());
+    }
+
+    #[test]
+    fn test_aggtrade_validate() {
+        let mut trade = AggTrade {
+            agg_trade_id: 12345,
+            price: Decimal::from_str("35000.50").unwrap(),
+            quantity: Decimal::from_str("1.5").unwrap(),
+            first_trade_id: 100,
+            last_trade_id: 105,
+            timestamp: 1699920000000,
+            is_buyer_maker: false,
+        };
+
+        assert!(trade.validate().is_ok());
+
+        // Test invalid first_trade_id > last_trade_id
+        trade.first_trade_id = 110;
+        assert!(trade.validate().is_err());
+        trade.first_trade_id = 100;
+
+        // Test negative price
+        trade.price = Decimal::from_str("-100.0").unwrap();
+        assert!(trade.validate().is_err());
+        trade.price = Decimal::from_str("35000.50").unwrap();
+
+        // Test zero quantity
+        trade.quantity = Decimal::ZERO;
+        assert!(trade.validate().is_err());
+        trade.quantity = Decimal::from_str("1.5").unwrap();
+
+        // Test negative timestamp
+        trade.timestamp = -1;
+        assert!(trade.validate().is_err());
+    }
+
+    #[test]
+    fn test_funding_rate_validate() {
+        let mut rate = FundingRate {
+            symbol: "BTCUSDT".to_string(),
+            funding_rate: Decimal::from_str("0.0001").unwrap(),
+            funding_time: 1577836800000, // 2020-01-01 00:00:00 UTC
+        };
+
+        assert!(rate.validate().is_ok());
+
+        // Test empty symbol
+        rate.symbol = String::new();
+        assert!(rate.validate().is_err());
+        rate.symbol = "BTCUSDT".to_string();
+
+        // Test negative funding_time
+        rate.funding_time = -1;
+        assert!(rate.validate().is_err());
+        rate.funding_time = 1577836800000;
+
+        // Test funding_time not at 8-hour boundary
+        rate.funding_time = 1577840400000; // 01:00:00 UTC (not at 8-hour boundary)
+        assert!(rate.validate().is_err());
+    }
+}
