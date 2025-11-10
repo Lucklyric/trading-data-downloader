@@ -55,7 +55,7 @@ pub struct CsvBarsWriter {
 }
 
 impl CsvBarsWriter {
-    /// Create a new CSV bars writer (T070)
+    /// Create a new CSV bars writer (T070, T169)
     ///
     /// # Arguments
     /// * `path` - Output file path
@@ -66,7 +66,7 @@ impl CsvBarsWriter {
         Self::new_with_buffer_size(path, DEFAULT_BUFFER_SIZE)
     }
 
-    /// Create a new CSV bars writer with custom buffer size
+    /// Create a new CSV bars writer with custom buffer size (T169)
     ///
     /// # Arguments
     /// * `path` - Output file path
@@ -79,7 +79,11 @@ impl CsvBarsWriter {
         buffer_size: usize,
     ) -> OutputResult<Self> {
         let path = path.as_ref();
-        info!("Creating CSV writer: path={}", path.display());
+        info!(
+            path = %path.display(),
+            buffer_size = buffer_size,
+            "Creating CSV bars writer"
+        );
 
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
@@ -94,7 +98,7 @@ impl CsvBarsWriter {
         let csv_writer = Writer::from_writer(buf_writer);
 
         // Headers will be written automatically by csv::Writer when using serialize()
-        debug!("CSV writer created (headers will be written on first serialize)");
+        debug!("CSV bars writer created successfully");
 
         Ok(Self {
             writer: csv_writer,
@@ -110,7 +114,7 @@ impl CsvBarsWriter {
 }
 
 impl BarsWriter for CsvBarsWriter {
-    /// Write a single bar (T072)
+    /// Write a single bar (T072, T169)
     fn write_bar(&mut self, bar: &Bar) -> OutputResult<()> {
         let record = BarRecord::from(bar);
 
@@ -123,7 +127,10 @@ impl BarsWriter for CsvBarsWriter {
         // Flush periodically (every 1000 bars)
         if self.bars_written % 1000 == 0 {
             self.flush()?;
-            debug!("Progress: {} bars written", self.bars_written);
+            debug!(
+                bars_written = self.bars_written,
+                "Periodic flush completed"
+            );
         }
 
         Ok(())
@@ -138,9 +145,12 @@ impl OutputWriter for CsvBarsWriter {
             .map_err(|e| OutputError::FlushError(format!("Failed to flush: {}", e)))
     }
 
-    /// Close the writer and finalize output (T073)
+    /// Close the writer and finalize output (T073, T169)
     fn close(mut self) -> OutputResult<()> {
-        debug!("Closing CSV writer: {} total bars written", self.bars_written);
+        debug!(
+            bars_written = self.bars_written,
+            "Closing CSV bars writer"
+        );
 
         // Final flush
         self.flush()?;
@@ -157,7 +167,10 @@ impl OutputWriter for CsvBarsWriter {
         file.sync_all()
             .map_err(|e| OutputError::IoError(format!("Failed to sync file: {}", e)))?;
 
-        info!("CSV writer closed successfully: {} bars written", self.bars_written);
+        info!(
+            bars_written = self.bars_written,
+            "CSV bars writer closed successfully"
+        );
         Ok(())
     }
 }

@@ -140,40 +140,48 @@ impl DownloadExecutor {
         })
     }
 
-    /// Load existing resume state if available (T079)
+    /// Load existing resume state if available (T079, T168)
     fn load_resume_state(&self, job: &DownloadJob) -> Result<Option<i64>, DownloadError> {
         let path = match self.get_resume_state_path(job) {
             Some(p) => p,
-            None => return Ok(None),
+            None => {
+                debug!("Resume capability not enabled");
+                return Ok(None);
+            }
         };
 
         if !path.exists() {
-            debug!("No resume state found at {}", path.display());
+            debug!("No resume state found, starting fresh download");
             return Ok(None);
         }
 
         match ResumeState::load(&path) {
             Ok(state) => {
+                info!("Found existing resume state");
                 // Find latest checkpoint
                 if let Some(checkpoint) = state.checkpoints().last() {
                     // Extract end_time from checkpoint type
                     if let CheckpointType::TimeWindow { end_time, .. } =
                         checkpoint.checkpoint_type()
                     {
-                        info!("Resuming from checkpoint: timestamp={}", end_time);
+                        info!(
+                            resume_timestamp = end_time,
+                            checkpoint_count = state.checkpoints().len(),
+                            "Resuming from checkpoint"
+                        );
                         return Ok(Some(*end_time));
                     }
                 }
                 Ok(None)
             }
             Err(e) => {
-                warn!("Failed to load resume state: {}", e);
+                warn!(error = %e, "Failed to load resume state, starting fresh");
                 Ok(None)
             }
         }
     }
 
-    /// Save checkpoint during download (T080)
+    /// Save checkpoint during download (T080, T168)
     async fn save_checkpoint(
         &self,
         job: &DownloadJob,
@@ -202,24 +210,35 @@ impl DownloadExecutor {
                 )
             };
 
+            // Log checkpoint info before moving it
+            debug!(
+                checkpoint_type = ?checkpoint.checkpoint_type(),
+                "Saving checkpoint to resume state"
+            );
+
             state.add_checkpoint(checkpoint);
 
             state.save(&path).map_err(|e| {
                 DownloadError::IoError(format!("Failed to save checkpoint: {}", e))
             })?;
 
-            debug!("Checkpoint saved to {}", path.display());
+            debug!(
+                total_checkpoints = state.checkpoints().len(),
+                "Checkpoint saved"
+            );
         }
 
         Ok(())
     }
 
-    /// Clean up resume state after successful completion
+    /// Clean up resume state after successful completion (T168)
     fn cleanup_resume_state(&self, job: &DownloadJob) {
         if let Some(path) = self.get_resume_state_path(job) {
             if path.exists() {
-                std::fs::remove_file(&path).ok();
-                debug!("Removed resume state file after successful completion");
+                match std::fs::remove_file(&path) {
+                    Ok(_) => info!("Removed resume state file after successful completion"),
+                    Err(e) => warn!(error = %e, "Failed to remove resume state file"),
+                }
             }
         }
     }
@@ -236,30 +255,47 @@ impl DownloadExecutor {
             .map_err(|e| DownloadError::FetcherError(format!("Failed to create fetcher: {}", e)))
     }
 
-    /// Retry with exponential backoff
+    /// Retry with exponential backoff (T168)
     async fn retry_with_backoff(&self, retry_count: u32, job: &mut DownloadJob) -> bool {
         job.progress.retries = retry_count as u64;
 
         if retry_count > self.max_retries {
+            error!(
+                retry_count = retry_count,
+                max_retries = self.max_retries,
+                "Max retries exceeded"
+            );
             return false;
         }
 
         let backoff = calculate_backoff(retry_count);
         warn!(
-            "Retry {}/{} after {:?} delay",
-            retry_count, self.max_retries, backoff
+            retry_count = retry_count,
+            max_retries = self.max_retries,
+            backoff_ms = backoff.as_millis(),
+            "Retrying after backoff delay"
         );
         tokio::time::sleep(backoff).await;
 
         true
     }
 
-    /// Execute bars download job (T076)
+    /// Execute bars download job (T076, T168)
     pub async fn execute_bars_job(
         &self,
         mut job: DownloadJob,
     ) -> Result<JobProgress, DownloadError> {
-        info!("Starting bars download job: {:?}", job.identifier);
+        // Create structured logging span for download operation
+        let span = tracing::info_span!(
+            "execute_bars_job",
+            identifier = %job.identifier,
+            symbol = %job.symbol,
+            start_time = job.start_time,
+            end_time = job.end_time
+        );
+        let _enter = span.enter();
+
+        info!("Starting bars download job");
 
         // Validate job
         job.validate()
@@ -289,8 +325,8 @@ impl DownloadExecutor {
         job.progress.total_bars = Some(total_bars);
 
         info!(
-            "Expected {} bars for range [{}, {})",
-            total_bars, job.start_time, job.end_time
+            total_bars = total_bars,
+            "Expected bars for time range"
         );
 
         job.status = JobStatus::InProgress;
@@ -320,19 +356,30 @@ impl DownloadExecutor {
         }
 
         info!(
-            "Job completed: status={:?}, bars_downloaded={}",
-            job.status, job.progress.downloaded_bars
+            status = ?job.status,
+            bars_downloaded = job.progress.downloaded_bars,
+            "Bars download job completed"
         );
 
         result
     }
 
-    /// Execute aggTrades download job (T127)
+    /// Execute aggTrades download job (T127, T168)
     pub async fn execute_aggtrades_job(
         &self,
         mut job: DownloadJob,
     ) -> Result<JobProgress, DownloadError> {
-        info!("Starting aggTrades download job: {:?}", job.identifier);
+        // Create structured logging span for download operation
+        let span = tracing::info_span!(
+            "execute_aggtrades_job",
+            identifier = %job.identifier,
+            symbol = %job.symbol,
+            start_time = job.start_time,
+            end_time = job.end_time
+        );
+        let _enter = span.enter();
+
+        info!("Starting aggTrades download job");
 
         // Validate job
         job.validate()
@@ -345,10 +392,7 @@ impl DownloadExecutor {
             job.progress.current_position = Some(start_time);
         }
 
-        info!(
-            "Fetching aggTrades for range [{}, {})",
-            job.start_time, job.end_time
-        );
+        debug!("Fetching aggTrades for time range");
 
         job.status = JobStatus::InProgress;
 
@@ -376,19 +420,30 @@ impl DownloadExecutor {
         }
 
         info!(
-            "Job completed: status={:?}, trades_downloaded={}",
-            job.status, job.progress.downloaded_bars
+            status = ?job.status,
+            trades_downloaded = job.progress.downloaded_bars,
+            "AggTrades download job completed"
         );
 
         result
     }
 
-    /// Execute funding rates download job (T149)
+    /// Execute funding rates download job (T149, T168)
     pub async fn execute_funding_job(
         &self,
         mut job: DownloadJob,
     ) -> Result<JobProgress, DownloadError> {
-        info!("Starting funding rates download job: {:?}", job.identifier);
+        // Create structured logging span for download operation
+        let span = tracing::info_span!(
+            "execute_funding_job",
+            identifier = %job.identifier,
+            symbol = %job.symbol,
+            start_time = job.start_time,
+            end_time = job.end_time
+        );
+        let _enter = span.enter();
+
+        info!("Starting funding rates download job");
 
         // Validate job
         job.validate()
@@ -401,10 +456,7 @@ impl DownloadExecutor {
             job.progress.current_position = Some(start_time);
         }
 
-        info!(
-            "Fetching funding rates for range [{}, {})",
-            job.start_time, job.end_time
-        );
+        debug!("Fetching funding rates for time range");
 
         job.status = JobStatus::InProgress;
 
@@ -432,8 +484,9 @@ impl DownloadExecutor {
         }
 
         info!(
-            "Job completed: status={:?}, funding_rates_downloaded={}",
-            job.status, job.progress.downloaded_bars
+            status = ?job.status,
+            funding_rates_downloaded = job.progress.downloaded_bars,
+            "Funding rates download job completed"
         );
 
         result
@@ -468,6 +521,11 @@ impl DownloadExecutor {
 
                                 // Save checkpoint at intervals
                                 if job.progress.downloaded_bars % CHECKPOINT_INTERVAL_BARS == 0 {
+                                    debug!(
+                                        bars_downloaded = job.progress.downloaded_bars,
+                                        current_timestamp = timestamp,
+                                        "Download progress"
+                                    );
                                     let checkpoint = Checkpoint::time_window(
                                         job.start_time,
                                         timestamp,

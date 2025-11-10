@@ -177,9 +177,9 @@ impl BinanceFuturesUsdtFetcher {
         })
     }
 
-    /// Fetch and parse exchangeInfo (T097, T098, T099)
+    /// Fetch and parse exchangeInfo (T097, T098, T099, T169)
     async fn fetch_exchange_info(&self) -> FetcherResult<Vec<Symbol>> {
-        debug!("Fetching exchange info");
+        info!("Fetching exchange info from API");
 
         let params: Vec<(&str, String)> = vec![];
         let body: Value = self
@@ -192,7 +192,10 @@ impl BinanceFuturesUsdtFetcher {
             .and_then(|v| v.as_array())
             .ok_or_else(|| FetcherError::InvalidResponse("Missing symbols array".to_string()))?;
 
+        debug!("Received {} symbols from API", symbols_array.len());
+
         let mut symbols = Vec::new();
+        let mut parse_errors = 0;
         for symbol_data in symbols_array {
             match Self::parse_symbol(symbol_data) {
                 Ok(symbol) => {
@@ -204,13 +207,24 @@ impl BinanceFuturesUsdtFetcher {
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to parse symbol: {}", e);
+                    parse_errors += 1;
+                    debug!("Failed to parse symbol: {}", e);
                     // Continue parsing other symbols
                 }
             }
         }
 
-        info!("Discovered {} tradable perpetual symbols", symbols.len());
+        if parse_errors > 0 {
+            warn!(
+                parse_errors = parse_errors,
+                "Some symbols failed to parse"
+            );
+        }
+
+        info!(
+            tradable_symbols = symbols.len(),
+            "Discovered tradable perpetual symbols"
+        );
         Ok(symbols)
     }
 

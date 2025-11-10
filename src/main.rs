@@ -1,19 +1,36 @@
-//! Main entry point for trading-data-downloader CLI (T088)
+//! Main entry point for trading-data-downloader CLI (T088, T167)
 
 use clap::Parser;
 use trading_data_downloader::cli::{Cli, Commands};
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 
+/// Initialize tracing subscriber with optional JSON formatting (T167)
+fn init_tracing() {
+    // Check if JSON output is requested via environment variable
+    let json_format = std::env::var("LOG_FORMAT")
+        .map(|v| v.to_lowercase() == "json")
+        .unwrap_or(false);
+
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("trading_data_downloader=info"));
+
+    if json_format {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .init();
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("trading_data_downloader=info")),
-        )
-        .init();
+    // Initialize tracing with enhanced configuration
+    init_tracing();
 
     // Parse CLI arguments
     let cli = Cli::parse();

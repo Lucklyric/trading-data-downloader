@@ -171,6 +171,7 @@ async fn test_download_executor_funding_job() {
         start_time: 1704067200000, // 2024-01-01 00:00:00 UTC
         end_time: 1704153600000,   // 2024-01-02 00:00:00 UTC
         output_path: output_path.clone(),
+        resume_dir: None,
         status: trading_data_downloader::downloader::JobStatus::Pending,
         progress: trading_data_downloader::downloader::JobProgress::default(),
     };

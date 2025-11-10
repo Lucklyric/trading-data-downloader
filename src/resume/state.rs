@@ -1,4 +1,4 @@
-//! Resume state persistence and management
+//! Resume state persistence and management (T170)
 //!
 //! Implements atomic file writes (FR-039) and schema versioning (FR-038)
 
@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::Path;
+use tracing::{debug, info, warn};
 
 /// Current resume state schema version
 const SCHEMA_VERSION: &str = "1.0.0";
@@ -79,11 +80,19 @@ impl ResumeState {
         &self.metadata
     }
 
-    /// Add a checkpoint and update metadata
+    /// Add a checkpoint and update metadata (T170)
     pub fn add_checkpoint(&mut self, checkpoint: Checkpoint) {
         self.metadata.total_checkpoints += 1;
         self.metadata.total_records += checkpoint.record_count();
         self.metadata.total_bytes += checkpoint.byte_count();
+
+        debug!(
+            checkpoint_type = ?checkpoint.checkpoint_type(),
+            total_checkpoints = self.metadata.total_checkpoints,
+            total_records = self.metadata.total_records,
+            "Adding checkpoint to resume state"
+        );
+
         self.checkpoints.push(checkpoint);
         self.updated_at = chrono::Utc::now().timestamp_millis();
     }
@@ -99,11 +108,17 @@ impl ResumeState {
         Ok(())
     }
 
-    /// Save state to file with atomic writes and file locking
+    /// Save state to file with atomic writes and file locking (T170)
     ///
     /// Uses tempfile::NamedTempFile for atomic writes (FR-039)
     /// Uses fd-lock for concurrency safety (FR-037)
     pub fn save(&self, path: &Path) -> Result<(), ResumeError> {
+        debug!(
+            path = %path.display(),
+            checkpoints = self.checkpoints.len(),
+            "Saving resume state"
+        );
+
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| ResumeError::IoError(e.to_string()))?;
@@ -123,6 +138,7 @@ impl ResumeState {
             .map_err(|e| ResumeError::LockError(format!("Failed to create lock file: {}", e)))?;
 
         // Acquire exclusive lock for writing
+        debug!("Acquiring write lock for resume state");
         let mut lock = RwLock::new(lock_file);
         let _guard = lock.write()
             .map_err(|e| ResumeError::LockError(format!("Failed to acquire write lock: {}", e)))?;
@@ -148,14 +164,26 @@ impl ResumeState {
             .persist(path)
             .map_err(|e| ResumeError::IoError(format!("Failed to persist temp file: {}", e)))?;
 
+        info!(
+            path = %path.display(),
+            checkpoints = self.checkpoints.len(),
+            total_records = self.metadata.total_records,
+            "Resume state saved successfully"
+        );
+
         // Lock is automatically released when it goes out of scope
         Ok(())
     }
 
-    /// Load state from file with locking
+    /// Load state from file with locking (T170)
     ///
     /// Uses fd-lock for concurrency safety (FR-037)
     pub fn load(path: &Path) -> Result<Self, ResumeError> {
+        debug!(
+            path = %path.display(),
+            "Loading resume state"
+        );
+
         // Create/open lock file for coordinating concurrent access
         let lock_path = path.with_extension("lock");
         let lock_file = OpenOptions::new()
@@ -166,6 +194,7 @@ impl ResumeState {
             .map_err(|e| ResumeError::LockError(format!("Failed to create lock file: {}", e)))?;
 
         // Acquire shared lock for reading
+        debug!("Acquiring read lock for resume state");
         let mut lock = RwLock::new(lock_file);
         let _guard = lock.read()
             .map_err(|e| ResumeError::LockError(format!("Failed to acquire read lock: {}", e)))?;
@@ -175,10 +204,31 @@ impl ResumeState {
             std::fs::read_to_string(path).map_err(|e| ResumeError::IoError(e.to_string()))?;
 
         let state: ResumeState = serde_json::from_str(&contents)
-            .map_err(|e| ResumeError::DeserializationError(e.to_string()))?;
+            .map_err(|e| {
+                warn!(error = %e, "Failed to deserialize resume state");
+                ResumeError::DeserializationError(e.to_string())
+            })?;
 
         // Validate schema version
-        state.validate_schema_version()?;
+        match state.validate_schema_version() {
+            Ok(_) => {
+                info!(
+                    checkpoints = state.checkpoints.len(),
+                    total_records = state.metadata.total_records,
+                    schema_version = %state.schema_version,
+                    "Resume state loaded successfully"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    found_version = %state.schema_version,
+                    expected_version = SCHEMA_VERSION,
+                    "Resume state schema version mismatch"
+                );
+                return Err(e);
+            }
+        }
 
         // Lock is automatically released when it goes out of scope
         Ok(state)
