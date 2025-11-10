@@ -12,6 +12,33 @@ use tracing::{error, info};
 
 use super::CliError;
 
+/// Resume modes (T175)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResumeMode {
+    /// Resume mode disabled
+    Off,
+    /// Resume from checkpoints if available
+    On,
+    /// Reset resume state and start fresh
+    Reset,
+    /// Verify resume state integrity before starting
+    Verify,
+}
+
+impl FromStr for ResumeMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "off" => Ok(ResumeMode::Off),
+            "on" => Ok(ResumeMode::On),
+            "reset" => Ok(ResumeMode::Reset),
+            "verify" => Ok(ResumeMode::Verify),
+            _ => Err(format!("Invalid resume mode: {}. Valid options: on, off, reset, verify", s)),
+        }
+    }
+}
+
 /// Trading Data Downloader CLI (T082)
 #[derive(Parser, Debug)]
 #[command(name = "trading-data-downloader")]
@@ -26,13 +53,21 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "human")]
     pub output_format: OutputFormat,
 
-    /// Enable resume capability
-    #[arg(long, global = true)]
-    pub resume: bool,
+    /// Resume mode: on, off, reset, or verify
+    #[arg(long, global = true, default_value = "off")]
+    pub resume: ResumeMode,
 
     /// Resume state directory
     #[arg(long, global = true)]
     pub resume_dir: Option<PathBuf>,
+
+    /// Number of concurrent downloads (default: 1)
+    #[arg(long, global = true, default_value = "1")]
+    pub concurrency: usize,
+
+    /// Maximum number of retries for failed requests (default: 3)
+    #[arg(long, global = true, default_value = "3")]
+    pub max_retries: usize,
 }
 
 /// CLI commands
@@ -230,14 +265,36 @@ impl BarsArgs {
         );
 
         // Create executor
-        let executor = if cli.resume {
-            let resume_dir = cli
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        } else {
-            DownloadExecutor::new()
+        let executor = match cli.resume {
+            ResumeMode::Off => DownloadExecutor::new(),
+            ResumeMode::On => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
+            ResumeMode::Reset => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                // Clear resume state before starting
+                if resume_dir.exists() {
+                    std::fs::remove_dir_all(&resume_dir)
+                        .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                }
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
+            ResumeMode::Verify => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                // TODO: Add resume state verification logic
+                // For now, just use normal resume
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
         };
 
         // Create progress bar (T087)
@@ -327,14 +384,36 @@ impl AggTradesArgs {
         );
 
         // Create executor
-        let executor = if cli.resume {
-            let resume_dir = cli
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        } else {
-            DownloadExecutor::new()
+        let executor = match cli.resume {
+            ResumeMode::Off => DownloadExecutor::new(),
+            ResumeMode::On => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
+            ResumeMode::Reset => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                // Clear resume state before starting
+                if resume_dir.exists() {
+                    std::fs::remove_dir_all(&resume_dir)
+                        .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                }
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
+            ResumeMode::Verify => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                // TODO: Add resume state verification logic
+                // For now, just use normal resume
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
         };
 
         // Create progress bar
@@ -569,14 +648,36 @@ impl FundingArgs {
         );
 
         // Create executor
-        let executor = if cli.resume {
-            let resume_dir = cli
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        } else {
-            DownloadExecutor::new()
+        let executor = match cli.resume {
+            ResumeMode::Off => DownloadExecutor::new(),
+            ResumeMode::On => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
+            ResumeMode::Reset => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                // Clear resume state before starting
+                if resume_dir.exists() {
+                    std::fs::remove_dir_all(&resume_dir)
+                        .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                }
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
+            ResumeMode::Verify => {
+                let resume_dir = cli
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                // TODO: Add resume state verification logic
+                // For now, just use normal resume
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
         };
 
         // Create progress bar
