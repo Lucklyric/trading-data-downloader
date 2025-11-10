@@ -1,4 +1,67 @@
 //! Data output writers
+//!
+//! This module provides writer traits and implementations for persisting trading data
+//! to various output formats. Currently supports CSV output with potential for future
+//! formats (Parquet, Arrow, etc.).
+//!
+//! # Architecture
+//!
+//! The module defines three main writer traits, one for each data type:
+//!
+//! - [`BarsWriter`] - For OHLCV candlestick data
+//! - [`AggTradesWriter`] - For aggregate trade data
+//! - [`FundingWriter`] - For funding rate data
+//!
+//! All writers implement the base [`OutputWriter`] trait with common operations:
+//! - [`OutputWriter::flush`] - Flush buffered data to disk
+//! - [`OutputWriter::close`] - Close the writer and finalize output
+//!
+//! # CSV Implementation
+//!
+//! The [`csv`] module provides CSV-based implementations:
+//! - [`csv::CsvBarsWriter`] - CSV writer for bars
+//! - [`csv::CsvAggTradesWriter`] - CSV writer for aggregate trades
+//! - [`csv::CsvFundingWriter`] - CSV writer for funding rates
+//!
+//! # Usage Example
+//!
+//! ```no_run
+//! use trading_data_downloader::output::{BarsWriter, OutputWriter};
+//! use trading_data_downloader::output::csv::CsvBarsWriter;
+//! use trading_data_downloader::Bar;
+//! use rust_decimal::Decimal;
+//! use std::path::Path;
+//!
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // Create a CSV writer for bars
+//! let mut writer = CsvBarsWriter::new(Path::new("bars.csv"))?;
+//!
+//! // Write bars
+//! let bar = Bar {
+//!     open_time: 1640995200000,
+//!     open: Decimal::new(47000, 0),
+//!     high: Decimal::new(48000, 0),
+//!     low: Decimal::new(46500, 0),
+//!     close: Decimal::new(47500, 0),
+//!     volume: Decimal::new(100, 0),
+//!     close_time: 1640998799999,
+//!     quote_volume: Decimal::new(4750000, 0),
+//!     trades: 1000,
+//!     taker_buy_base_volume: Decimal::new(60, 0),
+//!     taker_buy_quote_volume: Decimal::new(2850000, 0),
+//! };
+//!
+//! writer.write_bar(&bar)?;
+//! writer.flush()?;
+//! writer.close()?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Error Handling
+//!
+//! All operations return [`OutputResult<T>`] which wraps [`OutputError`].
+//! Errors include IO failures, CSV formatting issues, and serialization problems.
 
 use crate::{AggTrade, Bar, FundingRate};
 use std::path::Path;

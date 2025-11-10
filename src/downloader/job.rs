@@ -8,7 +8,10 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum JobType {
     /// OHLCV bars
-    Bars { interval: Interval },
+    Bars {
+        /// Time interval for candlestick aggregation
+        interval: Interval
+    },
     /// Aggregate trades
     AggTrades,
     /// Funding rates

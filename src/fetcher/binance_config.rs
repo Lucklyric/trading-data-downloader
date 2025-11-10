@@ -5,8 +5,8 @@
 //!
 //! # Market Types
 //!
-//! - **USDT-margined futures (FAPI)**: Uses https://fapi.binance.com with /fapi/v1/* endpoints
-//! - **COIN-margined futures (DAPI)**: Uses https://dapi.binance.com with /dapi/v1/* endpoints
+//! - **USDT-margined futures (FAPI)**: Uses <https://fapi.binance.com> with /fapi/v1/* endpoints
+//! - **COIN-margined futures (DAPI)**: Uses <https://dapi.binance.com> with /dapi/v1/* endpoints
 
 /// T228: Symbol format for market type
 ///
@@ -36,7 +36,7 @@ pub enum SymbolFormat {
 /// ```
 #[derive(Debug, Clone)]
 pub struct BinanceMarketConfig {
-    /// Base URL for API (e.g., https://fapi.binance.com)
+    /// Base URL for API (e.g., <https://fapi.binance.com>)
     pub base_url: &'static str,
 
     /// Klines endpoint path (e.g., /fapi/v1/klines)
@@ -58,7 +58,7 @@ pub struct BinanceMarketConfig {
 /// T226: USDT-margined futures configuration (FAPI)
 ///
 /// Configuration for Binance USDT-margined perpetual futures:
-/// - Base URL: https://fapi.binance.com
+/// - Base URL: <https://fapi.binance.com>
 /// - Endpoints: /fapi/v1/*
 /// - Symbol format: Perpetual (e.g., BTCUSDT)
 pub const USDT_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
@@ -73,7 +73,7 @@ pub const USDT_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
 /// T227: COIN-margined futures configuration (DAPI)
 ///
 /// Configuration for Binance COIN-margined perpetual futures:
-/// - Base URL: https://dapi.binance.com
+/// - Base URL: <https://dapi.binance.com>
 /// - Endpoints: /dapi/v1/*
 /// - Symbol format: CoinPerpetual (e.g., BTCUSD_PERP)
 pub const COIN_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {

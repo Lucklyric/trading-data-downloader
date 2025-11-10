@@ -1,8 +1,70 @@
 //! # Trading Data Downloader Library
 //!
-//! Core library for downloading crypto trading data from supported exchanges.
+//! A high-performance library for downloading historical cryptocurrency trading data
+//! from major exchanges. Designed for quantitative research, backtesting, and data analysis.
 //!
-//! v0.1 supports BINANCE Futures markets (USDT-margined and COIN-margined).
+//! ## Features
+//!
+//! - **Multi-Exchange Support**: Currently supports Binance Futures (USDT-margined and COIN-margined)
+//! - **Multiple Data Types**: OHLCV bars, aggregate trades, and funding rates
+//! - **Resume Capability**: Automatic checkpointing and resume for interrupted downloads
+//! - **Rate Limiting**: Built-in rate limiting to respect exchange API limits
+//! - **Archive Support**: Download from both live API and historical archives
+//! - **Type-Safe**: Strong typing with validation for all data structures
+//!
+//! ## Quick Start
+//!
+//! ```no_run
+//! use trading_data_downloader::{ExchangeIdentifier, downloader::DownloadJob, Interval};
+//! use chrono::Utc;
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // Parse exchange identifier
+//! let id = ExchangeIdentifier::parse("BINANCE:BTC/USDT:USDT")?;
+//!
+//! // Create a download job for 1-hour bars
+//! let job = DownloadJob::bars(
+//!     id,
+//!     "BTCUSDT".to_string(),
+//!     Interval::OneHour,
+//!     1640995200000, // 2022-01-01 00:00:00 UTC
+//!     1672531200000, // 2023-01-01 00:00:00 UTC
+//!     "./output.csv".into()
+//! );
+//!
+//! // Execute download
+//! let executor = trading_data_downloader::downloader::DownloadExecutor::new();
+//! executor.execute(job).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Architecture
+//!
+//! The library is organized into several core modules:
+//!
+//! - [`identifier`] - Exchange identifier parsing and validation (EXCHANGE:BASE/QUOTE:SETTLE)
+//! - [`registry`] - Registry of supported exchanges and their capabilities
+//! - [`fetcher`] - Data fetchers for different exchanges and markets
+//! - [`downloader`] - Download orchestration with retry and rate limiting
+//! - [`output`] - Data output writers (CSV, etc.)
+//! - [`resume`] - Resume capability with checkpointing
+//!
+//! ## Data Types
+//!
+//! The library defines strongly-typed structures for all trading data:
+//!
+//! - [`Bar`] - OHLCV candlestick data with volume and trade counts
+//! - [`AggTrade`] - Aggregated trade data
+//! - [`FundingRate`] - Perpetual futures funding rates
+//! - [`Symbol`] - Exchange symbol metadata
+//! - [`Interval`] - Time intervals for OHLCV data
+//!
+//! ## Supported Exchanges
+//!
+//! v0.1 supports:
+//! - Binance Futures USDT-margined (FAPI)
+//! - Binance Futures COIN-margined (DAPI)
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]

@@ -1,4 +1,56 @@
-//! Data fetcher implementations
+//! Data fetcher implementations for exchanges
+//!
+//! This module provides the core abstractions and implementations for fetching
+//! trading data from various exchanges. Each exchange may have multiple fetchers
+//! depending on the market type (e.g., spot, futures USDT-margined, futures COIN-margined).
+//!
+//! # Architecture
+//!
+//! The module is organized around the [`DataFetcher`] trait, which defines a
+//! uniform interface for retrieving different types of trading data:
+//!
+//! - OHLCV bars via [`DataFetcher::fetch_bars_stream`]
+//! - Aggregate trades via [`DataFetcher::fetch_aggtrades_stream`]
+//! - Funding rates via [`DataFetcher::fetch_funding_stream`]
+//! - Symbol metadata via [`DataFetcher::list_symbols`]
+//!
+//! # Supported Exchanges
+//!
+//! ## Binance Futures
+//!
+//! - **USDT-margined** ([`binance_futures_usdt`]): For USDT and BUSD settlement
+//! - **COIN-margined** ([`binance_futures_coin`]): For BTC, ETH, and USD settlement
+//!
+//! # Factory Function
+//!
+//! Use [`create_fetcher`] to automatically route to the correct fetcher based on
+//! an [`ExchangeIdentifier`]:
+//!
+//! ```no_run
+//! use trading_data_downloader::identifier::ExchangeIdentifier;
+//! use trading_data_downloader::fetcher::create_fetcher;
+//!
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let id = ExchangeIdentifier::parse("BINANCE:BTC/USDT:USDT")?;
+//! let fetcher = create_fetcher(&id)?;
+//! // fetcher is BinanceFuturesUsdtFetcher
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! # Error Handling
+//!
+//! All fetcher operations return [`FetcherResult<T>`] which wraps [`FetcherError`].
+//! Errors are categorized by type (HTTP, parse, API, rate limit, etc.) for appropriate
+//! error handling and retry logic.
+//!
+//! # Related Modules
+//!
+//! - [`binance_http`] - HTTP client with retry and rate limiting
+//! - [`binance_parser`] - Response parsing helpers
+//! - [`binance_config`] - Market configuration and endpoints
+//! - [`pagination`] - Pagination helpers for chunked requests
+//! - [`archive`] - Historical archive download support
 
 use crate::identifier::ExchangeIdentifier;
 use crate::{AggTrade, Bar, FundingRate, Interval, Symbol};
@@ -47,7 +99,12 @@ pub enum FetcherError {
 
     /// Checksum validation failed
     #[error("checksum validation failed: expected {expected}, got {actual}")]
-    ChecksumMismatch { expected: String, actual: String },
+    ChecksumMismatch {
+        /// Expected checksum value
+        expected: String,
+        /// Actual checksum value
+        actual: String
+    },
 
     /// Unsupported settlement asset
     #[error("unsupported settlement asset: {0}")]

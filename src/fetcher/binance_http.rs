@@ -27,7 +27,7 @@ impl BinanceHttpClient {
     ///
     /// # Arguments
     /// * `client` - Reqwest HTTP client
-    /// * `base_url` - Base URL for API endpoints (e.g., "https://fapi.binance.com")
+    /// * `base_url` - Base URL for API endpoints (e.g., "<https://fapi.binance.com>")
     /// * `rate_limiter` - Rate limiter for request throttling
     pub fn new(client: Client, base_url: impl Into<String>, rate_limiter: Arc<RateLimiter>) -> Self {
         Self {
