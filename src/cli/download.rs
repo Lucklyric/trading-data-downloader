@@ -78,6 +78,9 @@ pub enum Commands {
 
     /// List available data sources and symbols
     Sources(super::SourcesCommand),
+
+    /// Validate identifiers or resume state
+    Validate(super::ValidateCommand),
 }
 
 /// Download command arguments (T083-T084)

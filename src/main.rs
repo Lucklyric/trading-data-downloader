@@ -53,6 +53,9 @@ async fn main() {
         Commands::Sources(ref sources_cmd) => {
             sources_cmd.execute().await.map_err(|e| anyhow::anyhow!(e))
         }
+        Commands::Validate(ref validate_cmd) => {
+            validate_cmd.execute().await.map_err(|e| anyhow::anyhow!(e))
+        }
     };
 
     // Handle result

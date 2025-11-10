@@ -12,9 +12,11 @@ mod integration {
     pub mod download_trades;
     pub mod identifier_validation;
     pub mod logging;
+    pub mod progress;
     pub mod rate_limiting;
     pub mod resume_capability;
     pub mod symbol_discovery;
+    pub mod validation;
 }
 
 mod unit {
