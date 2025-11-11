@@ -1,1 +1,0 @@
-# trading-data-downloader

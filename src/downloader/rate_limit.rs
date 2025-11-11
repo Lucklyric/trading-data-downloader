@@ -63,20 +63,24 @@ impl RateLimiter {
     ///
     /// # Arguments
     /// * `weight` - Number of weight units to acquire
+    ///
+    /// # P0-5 Fix: Use OwnedSemaphorePermit to hold permits until window elapses
+    /// Previously, permits were dropped immediately (RAII) then add_permits()
+    /// was called, causing double-restoration and permit leakage.
     pub async fn acquire(&self, weight: usize) -> Result<(), RateLimitError> {
-        // Acquire semaphore permits
-        let _permit = self
+        // Acquire owned semaphore permits (not dropped at function end)
+        let permit = self
             .semaphore
-            .acquire_many(weight as u32)
+            .clone()
+            .acquire_many_owned(weight as u32)
             .await
             .map_err(|e| RateLimitError::AcquireError(e.to_string()))?;
 
-        // Release permits after window duration
-        let sem_clone = self.semaphore.clone();
+        // Hold permit for window duration, then drop (auto-releases)
         let window = self.window;
         tokio::spawn(async move {
             sleep(window).await;
-            sem_clone.add_permits(weight);
+            drop(permit); // Explicit drop for clarity (happens automatically)
         });
 
         Ok(())

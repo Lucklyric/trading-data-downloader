@@ -1,13 +1,13 @@
 //! CSV output writer implementation (T070-T073, T122-T125, T146-T147)
 
 use crate::{AggTrade, Bar, FundingRate};
-use csv::Writer;
+use csv::{ReaderBuilder, StringRecord, Writer};
 use serde::Serialize;
 use std::collections::HashSet;
-use std::fs::File;
 use std::io::BufWriter;
-use std::path::Path;
-use tracing::{debug, info};
+use std::path::{Path, PathBuf};
+use tempfile::{Builder as TempBuilder, NamedTempFile};
+use tracing::{debug, info, warn};
 
 use super::{AggTradesWriter, BarsWriter, FundingWriter, OutputError, OutputResult, OutputWriter};
 
@@ -49,9 +49,15 @@ impl From<&Bar> for BarRecord {
 
 /// CSV writer for OHLCV bars (T071)
 pub struct CsvBarsWriter {
-    writer: Writer<BufWriter<File>>,
+    // Writer to temp file in same dir
+    writer: Writer<BufWriter<NamedTempFile>>,
+    // Final path we will atomically persist to
+    final_path: PathBuf,
     bars_written: u64,
     buffer_size: usize,
+    // P0-2: in-memory dedup by open_time
+    seen_timestamps: HashSet<i64>,
+    duplicates_skipped: u64,
 }
 
 impl CsvBarsWriter {
@@ -89,21 +95,62 @@ impl CsvBarsWriter {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| OutputError::IoError(format!("Failed to create directory: {}", e)))?;
+            // Cleanup stale temps for this target (non-fatal)
+            if let Err(e) = cleanup_stale_temp_files_for_target(path) {
+                warn!(error = %e, "Failed to cleanup stale temp files");
+            }
         }
 
-        let file = File::create(path)
-            .map_err(|e| OutputError::IoError(format!("Failed to create file: {}", e)))?;
+        // Create .tmp temp file in same directory
+        let parent_dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let prefix = path.file_name().and_then(|s| s.to_str()).unwrap_or("output");
+        let tempfile = TempBuilder::new()
+            .prefix(prefix)
+            .suffix(".tmp")
+            .tempfile_in(&parent_dir)
+            .map_err(|e| OutputError::IoError(format!("Failed to create temp file: {}", e)))?;
 
-        let buf_writer = BufWriter::with_capacity(buffer_size, file);
-        let csv_writer = Writer::from_writer(buf_writer);
+        // P0-4: Append/merge mode - copy existing data to prevent data loss
+        let buf_writer = BufWriter::with_capacity(buffer_size, tempfile);
+        let (mut csv_writer, existing_rows) = if path.exists() && path.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
+            // Existing file: Create writer WITHOUT auto-headers, then copy existing data
+            let mut writer = csv::WriterBuilder::new()
+                .has_headers(false) // Disable auto-headers since we copy manually
+                .from_writer(buf_writer);
+            match copy_existing_csv_to_writer(path, &mut writer) {
+                Ok(count) => {
+                    info!(rows_copied = count, "Existing data copied for append/merge");
+                    (writer, count)
+                }
+                Err(e) => {
+                    // Copy failed but writer already created - continue with it
+                    // New data will be appended without header (dedup prevents issues)
+                    warn!(error = %e, "Failed to copy existing data, continuing without old data");
+                    (writer, 0)
+                }
+            }
+        } else {
+            // New file: Auto-headers enabled (writes header automatically)
+            (Writer::from_writer(buf_writer), 0)
+        };
 
-        // Headers will be written automatically by csv::Writer when using serialize()
-        debug!("CSV bars writer created successfully");
+        debug!(existing_rows = existing_rows, "CSV bars writer created successfully (atomic temp file)");
+
+        // P0-2: preload dedup set from existing file
+        let mut seen = HashSet::new();
+        if path.exists() {
+            if let Err(e) = load_existing_bars_keys(path, &mut seen) {
+                warn!(error = %e, "Failed to preload dedup keys from bars file");
+            }
+        }
 
         Ok(Self {
             writer: csv_writer,
+            final_path: path.to_path_buf(),
             bars_written: 0,
             buffer_size,
+            seen_timestamps: seen,
+            duplicates_skipped: 0,
         })
     }
 
@@ -116,6 +163,14 @@ impl CsvBarsWriter {
 impl BarsWriter for CsvBarsWriter {
     /// Write a single bar (T072, T169)
     fn write_bar(&mut self, bar: &Bar) -> OutputResult<()> {
+        // P0-2: dedup by open_time
+        if self.seen_timestamps.contains(&bar.open_time) {
+            self.duplicates_skipped += 1;
+            debug!(timestamp = bar.open_time, duplicates = self.duplicates_skipped, "Skipping duplicate bar");
+            return Ok(());
+        }
+        self.seen_timestamps.insert(bar.open_time);
+
         let record = BarRecord::from(bar);
 
         self.writer
@@ -155,20 +210,21 @@ impl OutputWriter for CsvBarsWriter {
         // Final flush
         self.flush()?;
 
-        // Get inner writer and sync to disk
-        let buf_writer = self.writer.into_inner().map_err(|e| {
-            OutputError::IoError(format!("Failed to get inner writer: {}", e))
-        })?;
-
-        let file = buf_writer.into_inner().map_err(|e| {
-            OutputError::IoError(format!("Failed to get file handle: {}", e))
-        })?;
-
-        file.sync_all()
-            .map_err(|e| OutputError::IoError(format!("Failed to sync file: {}", e)))?;
+        // Acquire temp file, fsync, then atomically persist to final path
+        // P0-4: No need to remove_file() - temp contains complete data (old + new)
+        let buf_writer = self.writer.into_inner()
+            .map_err(|e| OutputError::IoError(format!("Failed to get inner writer: {}", e)))?;
+        let mut tmp = buf_writer.into_inner()
+            .map_err(|e| OutputError::IoError(format!("Failed to get temp file handle: {}", e)))?;
+        tmp.as_file()
+            .sync_all()
+            .map_err(|e| OutputError::IoError(format!("Failed to sync temp file: {}", e)))?;
+        tmp.persist(&self.final_path)
+            .map_err(|e| OutputError::IoError(format!("Atomic persist to {} failed: {}", self.final_path.display(), e)))?;
 
         info!(
             bars_written = self.bars_written,
+            duplicates_skipped = self.duplicates_skipped,
             "CSV bars writer closed successfully"
         );
         Ok(())
@@ -203,7 +259,8 @@ impl From<&AggTrade> for AggTradeRecord {
 
 /// CSV writer for aggregate trades (T122)
 pub struct CsvAggTradesWriter {
-    writer: Writer<BufWriter<File>>,
+    writer: Writer<BufWriter<NamedTempFile>>,
+    final_path: PathBuf,
     trades_written: u64,
     buffer_size: usize,
     /// HashSet for deduplication by agg_trade_id (T125)
@@ -242,21 +299,52 @@ impl CsvAggTradesWriter {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| OutputError::IoError(format!("Failed to create directory: {}", e)))?;
+            if let Err(e) = cleanup_stale_temp_files_for_target(path) {
+                warn!(error = %e, "Failed to cleanup stale temp files");
+            }
         }
 
-        let file = File::create(path)
-            .map_err(|e| OutputError::IoError(format!("Failed to create file: {}", e)))?;
+        let parent_dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let prefix = path.file_name().and_then(|s| s.to_str()).unwrap_or("output");
+        let tempfile = TempBuilder::new().prefix(prefix).suffix(".tmp").tempfile_in(&parent_dir)
+            .map_err(|e| OutputError::IoError(format!("Failed to create temp file: {}", e)))?;
 
-        let buf_writer = BufWriter::with_capacity(buffer_size, file);
-        let csv_writer = Writer::from_writer(buf_writer);
+        // P0-4: Append/merge mode - copy existing data to prevent data loss
+        let buf_writer = BufWriter::with_capacity(buffer_size, tempfile);
+        let (csv_writer, existing_rows) = if path.exists() && path.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
+            let mut writer = csv::WriterBuilder::new()
+                .has_headers(false)
+                .from_writer(buf_writer);
+            match copy_existing_csv_to_writer(path, &mut writer) {
+                Ok(count) => {
+                    info!(rows_copied = count, "Existing aggTrades data copied for append/merge");
+                    (writer, count)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to copy existing aggTrades data");
+                    (writer, 0)
+                }
+            }
+        } else {
+            (Writer::from_writer(buf_writer), 0)
+        };
 
-        debug!("CSV aggTrades writer created (headers will be written on first serialize)");
+        debug!(existing_rows = existing_rows, "CSV aggTrades writer created (atomic temp file)");
+
+        // P0-2: preload dedup IDs
+        let mut seen_ids = HashSet::new();
+        if path.exists() {
+            if let Err(e) = load_existing_aggtrade_ids(path, &mut seen_ids) {
+                warn!(error = %e, "Failed to preload dedup IDs from aggtrades");
+            }
+        }
 
         Ok(Self {
             writer: csv_writer,
+            final_path: path.to_path_buf(),
             trades_written: 0,
             buffer_size,
-            seen_ids: HashSet::new(),
+            seen_ids,
             duplicates_skipped: 0,
         })
     }
@@ -328,17 +416,16 @@ impl OutputWriter for CsvAggTradesWriter {
         // Final flush
         self.flush()?;
 
-        // Get inner writer and sync to disk
-        let buf_writer = self.writer.into_inner().map_err(|e| {
-            OutputError::IoError(format!("Failed to get inner writer: {}", e))
-        })?;
-
-        let file = buf_writer.into_inner().map_err(|e| {
-            OutputError::IoError(format!("Failed to get file handle: {}", e))
-        })?;
-
-        file.sync_all()
-            .map_err(|e| OutputError::IoError(format!("Failed to sync file: {}", e)))?;
+        // Acquire temp file, fsync, then atomically persist to final path
+        // P0-4: No need to remove_file() - temp contains complete data (old + new)
+        let buf_writer = self.writer.into_inner()
+            .map_err(|e| OutputError::IoError(format!("Failed to get inner writer: {}", e)))?;
+        let mut tmp = buf_writer.into_inner()
+            .map_err(|e| OutputError::IoError(format!("Failed to get temp file handle: {}", e)))?;
+        tmp.as_file().sync_all()
+            .map_err(|e| OutputError::IoError(format!("Failed to sync temp file: {}", e)))?;
+        tmp.persist(&self.final_path)
+            .map_err(|e| OutputError::IoError(format!("Atomic persist to {} failed: {}", self.final_path.display(), e)))?;
 
         info!(
             "CSV aggTrades writer closed successfully: {} trades written, {} duplicates skipped",
@@ -368,9 +455,12 @@ impl From<&FundingRate> for FundingRateRecord {
 
 /// CSV writer for funding rates (T146)
 pub struct CsvFundingWriter {
-    writer: Writer<BufWriter<File>>,
+    writer: Writer<BufWriter<NamedTempFile>>,
+    final_path: PathBuf,
     rates_written: u64,
     buffer_size: usize,
+    seen_timestamps: HashSet<i64>,
+    duplicates_skipped: u64,
 }
 
 impl CsvFundingWriter {
@@ -397,21 +487,59 @@ impl CsvFundingWriter {
         path: P,
         buffer_size: usize,
     ) -> OutputResult<Self> {
-        let file =
-            File::create(path.as_ref()).map_err(|e| OutputError::IoError(e.to_string()))?;
-        let buf_writer = BufWriter::with_capacity(buffer_size, file);
-        let writer = Writer::from_writer(buf_writer);
+        let path = path.as_ref();
+        let parent_dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        std::fs::create_dir_all(&parent_dir)
+            .map_err(|e| OutputError::IoError(format!("Failed to create directory: {}", e)))?;
+        if let Err(e) = cleanup_stale_temp_files_for_target(path) {
+            warn!(error = %e, "Failed to cleanup stale temp files");
+        }
+        let prefix = path.file_name().and_then(|s| s.to_str()).unwrap_or("output");
+        let tempfile = TempBuilder::new().prefix(prefix).suffix(".tmp").tempfile_in(&parent_dir)
+            .map_err(|e| OutputError::IoError(format!("Failed to create temp file: {}", e)))?;
+
+        // P0-4: Append/merge mode - copy existing data to prevent data loss
+        let buf_writer = BufWriter::with_capacity(buffer_size, tempfile);
+        let (writer, existing_rows) = if path.exists() && path.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
+            let mut w = csv::WriterBuilder::new()
+                .has_headers(false)
+                .from_writer(buf_writer);
+            match copy_existing_csv_to_writer(path, &mut w) {
+                Ok(count) => {
+                    info!(rows_copied = count, "Existing funding data copied for append/merge");
+                    (w, count)
+                }
+                Err(e) => {
+                    warn!(error = %e, "Failed to copy existing funding data");
+                    (w, 0)
+                }
+            }
+        } else {
+            (Writer::from_writer(buf_writer), 0)
+        };
 
         info!(
-            "Created CSV funding writer: path={}, buffer={}",
-            path.as_ref().display(),
-            buffer_size
+            "Created CSV funding writer: path={}, buffer={}, existing_rows={}",
+            path.display(),
+            buffer_size,
+            existing_rows
         );
+
+        // preload dedup keys
+        let mut seen = HashSet::new();
+        if path.exists() {
+            if let Err(e) = load_existing_funding_keys(path, &mut seen) {
+                warn!(error = %e, "Failed to preload dedup keys from funding CSV");
+            }
+        }
 
         Ok(Self {
             writer,
+            final_path: path.to_path_buf(),
             rates_written: 0,
             buffer_size,
+            seen_timestamps: seen,
+            duplicates_skipped: 0,
         })
     }
 
@@ -429,6 +557,13 @@ impl CsvFundingWriter {
 impl FundingWriter for CsvFundingWriter {
     /// Write a single funding rate to CSV (T147)
     fn write_funding(&mut self, rate: &FundingRate) -> OutputResult<()> {
+        if self.seen_timestamps.contains(&rate.funding_time) {
+            self.duplicates_skipped += 1;
+            debug!(timestamp = rate.funding_time, duplicates = self.duplicates_skipped, "Skipping duplicate funding");
+            return Ok(());
+        }
+        self.seen_timestamps.insert(rate.funding_time);
+
         let record = FundingRateRecord::from(rate);
 
         self.writer
@@ -465,17 +600,16 @@ impl OutputWriter for CsvFundingWriter {
         // Final flush
         self.flush()?;
 
-        // Get inner writer and sync to disk
-        let buf_writer = self.writer.into_inner().map_err(|e| {
-            OutputError::IoError(format!("Failed to get inner writer: {}", e))
-        })?;
-
-        let file = buf_writer.into_inner().map_err(|e| {
-            OutputError::IoError(format!("Failed to get file handle: {}", e))
-        })?;
-
-        file.sync_all()
-            .map_err(|e| OutputError::IoError(format!("Failed to sync file: {}", e)))?;
+        // Acquire temp file, fsync, then atomically persist to final path
+        // P0-4: No need to remove_file() - temp contains complete data (old + new)
+        let buf_writer = self.writer.into_inner()
+            .map_err(|e| OutputError::IoError(format!("Failed to get inner writer: {}", e)))?;
+        let mut tmp = buf_writer.into_inner()
+            .map_err(|e| OutputError::IoError(format!("Failed to get temp file handle: {}", e)))?;
+        tmp.as_file().sync_all()
+            .map_err(|e| OutputError::IoError(format!("Failed to sync temp file: {}", e)))?;
+        tmp.persist(&self.final_path)
+            .map_err(|e| OutputError::IoError(format!("Atomic persist to {} failed: {}", self.final_path.display(), e)))?;
 
         info!(
             "CSV funding writer closed successfully: {} rates written",
@@ -483,6 +617,145 @@ impl OutputWriter for CsvFundingWriter {
         );
         Ok(())
     }
+}
+
+// ===== Helpers: cleanup, coverage scan, and existing-key preload (FR-039, FR-043, FR-026) =====
+
+/// Clean up stale .tmp files for a given target output file
+pub fn cleanup_stale_temp_files_for_target<P: AsRef<Path>>(target: P) -> OutputResult<()> {
+    let target = target.as_ref();
+    if let Some(dir) = target.parent() {
+        let stem = target.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        for entry in std::fs::read_dir(dir).map_err(|e| OutputError::IoError(format!("Failed to read dir: {}", e)))? {
+            let path = entry.map_err(|e| OutputError::IoError(e.to_string()))?.path();
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if name.starts_with(stem) && name.ends_with(".tmp") {
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Read time range (min, max timestamps) from an existing CSV file
+pub fn read_time_range(path: &Path) -> OutputResult<Option<(i64, i64)>> {
+    if !path.exists() { return Ok(None); }
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_path(path)
+        .map_err(|e| OutputError::IoError(format!("Failed to open CSV: {}", e)))?;
+    let headers = rdr.headers().map_err(|e| OutputError::CsvError(format!("Failed to read headers: {}", e)))?.clone();
+    let ts_index = find_timestamp_index(&headers)
+        .ok_or_else(|| OutputError::CsvError("Could not find timestamp column".to_string()))?;
+    let (mut min_ts, mut max_ts): (Option<i64>, Option<i64>) = (None, None);
+    for rec in rdr.records() {
+        let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {}", e)))?;
+        if let Some(ts) = parse_i64(rec.get(ts_index)) {
+            min_ts = Some(min_ts.map_or(ts, |m| m.min(ts)));
+            max_ts = Some(max_ts.map_or(ts, |m| m.max(ts)));
+        }
+    }
+    Ok(match (min_ts, max_ts) { (Some(a), Some(b)) => Some((a, b)), _ => None })
+}
+
+/// Find the index of a timestamp column in CSV headers
+fn find_timestamp_index(headers: &StringRecord) -> Option<usize> {
+    for name in ["open_time", "timestamp", "funding_time"] {
+        if let Some(idx) = headers.iter().position(|h| h == name) { return Some(idx); }
+    }
+    None
+}
+
+/// Parse an i64 from a string
+fn parse_i64(s: Option<&str>) -> Option<i64> {
+    s.and_then(|v| v.parse::<i64>().ok())
+}
+
+/// P0-4: Copy existing CSV data to writer for append/merge mode
+/// Streams existing file contents (header + all records) to prevent data loss
+fn copy_existing_csv_to_writer<W: std::io::Write>(
+    path: &Path,
+    writer: &mut Writer<W>,
+) -> OutputResult<usize> {
+    if !path.exists() || path.metadata().map(|m| m.len()).unwrap_or(0) == 0 {
+        return Ok(0);
+    }
+
+    debug!(path = %path.display(), "Copying existing CSV data for append/merge");
+
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(true)
+        .from_path(path)
+        .map_err(|e| OutputError::IoError(format!("Failed to open existing CSV: {}", e)))?;
+
+    // Copy header
+    let headers = rdr.headers()
+        .map_err(|e| OutputError::CsvError(format!("Failed to read headers: {}", e)))?;
+    writer.write_record(headers)
+        .map_err(|e| OutputError::CsvError(format!("Failed to write headers: {}", e)))?;
+
+    // Copy all valid records (stops at first error to avoid replicating truncated data)
+    let mut copied = 0;
+    for result in rdr.records() {
+        match result {
+            Ok(record) => {
+                writer.write_record(&record)
+                    .map_err(|e| OutputError::CsvError(format!("Failed to write record: {}", e)))?;
+                copied += 1;
+            }
+            Err(e) => {
+                warn!(error = %e, copied = copied, "Stopped copying at first bad record (likely truncated)");
+                break;
+            }
+        }
+    }
+
+    debug!(rows_copied = copied, "Existing CSV data copied successfully");
+    Ok(copied)
+}
+
+/// Load existing bar keys (open_time) from CSV into HashSet
+fn load_existing_bars_keys(path: &Path, out: &mut HashSet<i64>) -> OutputResult<()> {
+    if !path.exists() { return Ok(()); }
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_path(path)
+        .map_err(|e| OutputError::IoError(format!("Failed to open bars CSV: {}", e)))?;
+    let headers = rdr.headers().map_err(|e| OutputError::CsvError(format!("Failed headers: {}", e)))?.clone();
+    let ts_index = headers.iter().position(|h| h == "open_time")
+        .ok_or_else(|| OutputError::CsvError("open_time header not found".to_string()))?;
+    for rec in rdr.records() {
+        let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {}", e)))?;
+        if let Some(ts) = parse_i64(rec.get(ts_index)) { out.insert(ts); }
+    }
+    Ok(())
+}
+
+/// Load existing aggtrade IDs from CSV into HashSet
+fn load_existing_aggtrade_ids(path: &Path, out: &mut HashSet<i64>) -> OutputResult<()> {
+    if !path.exists() { return Ok(()); }
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_path(path)
+        .map_err(|e| OutputError::IoError(format!("Failed to open aggtrades CSV: {}", e)))?;
+    let headers = rdr.headers().map_err(|e| OutputError::CsvError(format!("Failed headers: {}", e)))?.clone();
+    let id_index = headers.iter().position(|h| h == "agg_trade_id")
+        .ok_or_else(|| OutputError::CsvError("agg_trade_id header not found".to_string()))?;
+    for rec in rdr.records() {
+        let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {}", e)))?;
+        if let Some(id) = parse_i64(rec.get(id_index)) { out.insert(id); }
+    }
+    Ok(())
+}
+
+/// Load existing funding keys (funding_time) from CSV into HashSet
+fn load_existing_funding_keys(path: &Path, out: &mut HashSet<i64>) -> OutputResult<()> {
+    if !path.exists() { return Ok(()); }
+    let mut rdr = ReaderBuilder::new().has_headers(true).from_path(path)
+        .map_err(|e| OutputError::IoError(format!("Failed to open funding CSV: {}", e)))?;
+    let headers = rdr.headers().map_err(|e| OutputError::CsvError(format!("Failed headers: {}", e)))?.clone();
+    let ts_index = headers.iter().position(|h| h == "funding_time")
+        .ok_or_else(|| OutputError::CsvError("funding_time header not found".to_string()))?;
+    for rec in rdr.records() {
+        let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {}", e)))?;
+        if let Some(ts) = parse_i64(rec.get(ts_index)) { out.insert(ts); }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -519,6 +792,9 @@ mod tests {
         let bar = create_test_bar();
         writer.write_bar(&bar).unwrap();
         writer.flush().unwrap();
+
+        // Close writer to persist temp file atomically (P0-4 fix)
+        writer.close().unwrap();
 
         // Verify file was created
         assert!(output_path.exists());
@@ -588,10 +864,15 @@ mod tests {
         let mut writer = CsvBarsWriter::new(&output_path).unwrap();
         assert_eq!(writer.bars_written(), 0);
 
+        // Write first bar
         writer.write_bar(&create_test_bar()).unwrap();
         assert_eq!(writer.bars_written(), 1);
 
-        writer.write_bar(&create_test_bar()).unwrap();
+        // Write second bar with different timestamp (deduplication requires unique timestamps)
+        let mut bar2 = create_test_bar();
+        bar2.open_time += 60000; // +1 minute
+        bar2.close_time += 60000;
+        writer.write_bar(&bar2).unwrap();
         assert_eq!(writer.bars_written(), 2);
     }
 }

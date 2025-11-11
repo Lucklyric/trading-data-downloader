@@ -8,7 +8,7 @@ use crate::downloader::config::{
 use crate::downloader::{DownloadError, DownloadJob, JobProgress, JobStatus};
 use crate::fetcher::{create_fetcher, DataFetcher};
 use crate::identifier::ExchangeIdentifier;
-use crate::output::csv::{CsvAggTradesWriter, CsvBarsWriter, CsvFundingWriter};
+use crate::output::csv::{CsvAggTradesWriter, CsvBarsWriter, CsvFundingWriter, read_time_range};
 use crate::output::{AggTradesWriter, BarsWriter, FundingWriter, OutputWriter};
 use crate::resume::checkpoint::{Checkpoint, CheckpointType};
 use crate::resume::state::ResumeState;
@@ -91,6 +91,7 @@ impl WriterType {
 pub struct DownloadExecutor {
     resume_dir: Option<PathBuf>,
     max_retries: u32,
+    force: bool,
 }
 
 impl DownloadExecutor {
@@ -99,6 +100,7 @@ impl DownloadExecutor {
         Self {
             resume_dir: None,
             max_retries: MAX_RETRIES,
+            force: false,
         }
     }
 
@@ -110,12 +112,19 @@ impl DownloadExecutor {
         Self {
             resume_dir: Some(resume_dir),
             max_retries: MAX_RETRIES,
+            force: false,
         }
     }
 
     /// Set maximum number of retries
     pub fn with_max_retries(mut self, max_retries: u32) -> Self {
         self.max_retries = max_retries;
+        self
+    }
+
+    /// Enable or disable forcing re-download regardless of existing files
+    pub fn with_force(mut self, force: bool) -> Self {
+        self.force = force;
         self
     }
 
@@ -318,6 +327,24 @@ impl DownloadExecutor {
             job.progress.current_position = Some(start_time);
         }
 
+        // P0-3: If output exists and not forcing, skip/adjust to avoid redundant downloads
+        if !self.force && job.output_path.exists() {
+            if let Ok(Some((_min_ts, max_ts))) = read_time_range(&job.output_path) {
+                let adjusted = max_ts + 1;
+                if adjusted >= job.end_time {
+                    info!("Output already fully covers requested bars range; skipping download");
+                    job.status = JobStatus::Completed;
+                    job.progress.current_position = Some(max_ts);
+                    return Ok(job.progress.clone());
+                }
+                if adjusted > start_time {
+                    info!(start_time = adjusted, "Adjusting bars start_time to existing coverage end + 1");
+                    start_time = adjusted;
+                    job.progress.current_position = Some(start_time);
+                }
+            }
+        }
+
         // Calculate expected total bars
         let interval_ms = interval.to_milliseconds();
         let total_duration = job.end_time - job.start_time;
@@ -392,6 +419,24 @@ impl DownloadExecutor {
             job.progress.current_position = Some(start_time);
         }
 
+        // P0-3: If output exists and not forcing, skip/adjust to avoid redundant downloads
+        if !self.force && job.output_path.exists() {
+            if let Ok(Some((_min_ts, max_ts))) = read_time_range(&job.output_path) {
+                let adjusted = max_ts + 1;
+                if adjusted >= job.end_time {
+                    info!("Output fully covers requested aggTrades; skipping");
+                    job.status = JobStatus::Completed;
+                    job.progress.current_position = Some(max_ts);
+                    return Ok(job.progress.clone());
+                }
+                if adjusted > start_time {
+                    info!(start_time = adjusted, "Adjusting aggTrades start_time to coverage end + 1");
+                    start_time = adjusted;
+                    job.progress.current_position = Some(start_time);
+                }
+            }
+        }
+
         debug!("Fetching aggTrades for time range");
 
         job.status = JobStatus::InProgress;
@@ -454,6 +499,24 @@ impl DownloadExecutor {
         let mut start_time = resume_time.unwrap_or(job.start_time);
         if resume_time.is_some() {
             job.progress.current_position = Some(start_time);
+        }
+
+        // P0-3: If output exists and not forcing, skip/adjust to avoid redundant downloads
+        if !self.force && job.output_path.exists() {
+            if let Ok(Some((_min_ts, max_ts))) = read_time_range(&job.output_path) {
+                let adjusted = max_ts + 1;
+                if adjusted >= job.end_time {
+                    info!("Output fully covers requested funding; skipping");
+                    job.status = JobStatus::Completed;
+                    job.progress.current_position = Some(max_ts);
+                    return Ok(job.progress.clone());
+                }
+                if adjusted > start_time {
+                    info!(start_time = adjusted, "Adjusting funding start_time to coverage end + 1");
+                    start_time = adjusted;
+                    job.progress.current_position = Some(start_time);
+                }
+            }
         }
 
         debug!("Fetching funding rates for time range");

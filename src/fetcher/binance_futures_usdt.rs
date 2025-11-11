@@ -3,19 +3,17 @@
 use crate::{AggTrade, Bar, ContractType, FundingRate, Interval, Symbol, TradingStatus};
 use async_trait::async_trait;
 use futures_util::{stream, StreamExt};
-use reqwest::Client;
 use rust_decimal::Decimal;
 use serde_json::Value;
 use std::str::FromStr;
-use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use super::archive::ArchiveDownloader;
 use super::binance_config::USDT_FUTURES_CONFIG;
 use super::binance_http::BinanceHttpClient;
 use super::binance_parser::BinanceParser;
+use super::shared_resources::{global_binance_rate_limiter, global_http_client};
 use super::{AggTradeStream, BarStream, DataFetcher, FetcherError, FetcherResult, FundingStream};
-use crate::downloader::rate_limit::RateLimiter;
 
 const ONE_HOUR_MS: i64 = 60 * 60 * 1000; // 1 hour in milliseconds (aggTrades API constraint)
 const AGGTRADES_LIMIT: usize = 1000; // Max aggTrades per request
@@ -30,16 +28,15 @@ pub struct BinanceFuturesUsdtFetcher {
 
 impl BinanceFuturesUsdtFetcher {
     /// Create a new Binance Futures USDT fetcher
+    ///
+    /// Uses global shared HTTP client and rate limiter to ensure:
+    /// - Connection pooling across all download operations
+    /// - Proper rate limit enforcement across concurrent downloads
     pub fn new() -> Self {
-        let client = Client::new();
-        let rate_limiter = Arc::new(RateLimiter::weight_based(
-            2400,
-            std::time::Duration::from_secs(60),
-        ));
         let http_client = BinanceHttpClient::new(
-            client,
+            global_http_client(),
             USDT_FUTURES_CONFIG.base_url,
-            rate_limiter,
+            global_binance_rate_limiter(),
         );
 
         Self {
@@ -49,14 +46,15 @@ impl BinanceFuturesUsdtFetcher {
     }
 
     /// Create with custom base URL (for testing)
+    ///
+    /// NOTE: This still uses the global rate limiter to ensure tests don't bypass quotas
     #[allow(dead_code)]
     pub fn new_with_base_url(base_url: String) -> Self {
-        let client = Client::new();
-        let rate_limiter = Arc::new(RateLimiter::weight_based(
-            2400,
-            std::time::Duration::from_secs(60),
-        ));
-        let http_client = BinanceHttpClient::new(client, base_url, rate_limiter);
+        let http_client = BinanceHttpClient::new(
+            global_http_client(),
+            base_url,
+            global_binance_rate_limiter(),
+        );
 
         Self {
             http_client,
@@ -412,6 +410,7 @@ impl BinanceFuturesUsdtFetcher {
         if use_archives {
             info!("Using archive strategy for historical data");
             let archive_downloader = self.archive_downloader.clone();
+            let fetcher = self.clone(); // Capture self for live API fallback
 
             // Generate date range for archives
             let dates = ArchiveDownloader::date_range_for_timestamps(start_time, end_time);
@@ -420,7 +419,9 @@ impl BinanceFuturesUsdtFetcher {
                 (dates, 0usize, false),
                 move |(dates, index, done)| {
                     let archive_downloader = archive_downloader.clone();
+                    let fetcher = fetcher.clone();
                     let symbol = symbol.clone();
+                    let interval_str = interval.to_string();
 
                     async move {
                         if done || index >= dates.len() {
@@ -444,9 +445,42 @@ impl BinanceFuturesUsdtFetcher {
                                 Some((stream::iter(items), (dates, index + 1, false)))
                             }
                             Err(e) => {
-                                warn!("Archive download failed for {}: {}, falling back to live API", date, e);
-                                // Return error and mark as done
-                                Some((stream::iter(vec![Err(e)]), (dates, index + 1, true)))
+                                let date_str = date.format("%Y-%m-%d").to_string();
+                                warn!("Archive download failed for {}: {}, falling back to live API for this date", date_str, e);
+
+                                // Calculate the time range for this specific date (start and end of day)
+                                // NOTE: Binance data archives use UTC timezone. The NaiveDate from
+                                // date_range_for_timestamps represents a date in UTC, so we explicitly
+                                // convert to UTC timestamp here.
+                                // Archive date "2024-01-01" = "2024-01-01 00:00:00 UTC" to "2024-01-01 23:59:59 UTC"
+                                let day_start = date.and_hms_opt(0, 0, 0)
+                                    .expect("valid time").and_utc().timestamp() * 1000;
+                                let day_end = day_start + 86400000; // +24 hours in ms (full UTC day)
+
+                                // Clamp to the requested range
+                                let range_start = day_start.max(start_time);
+                                let range_end = day_end.min(end_time);
+
+                                // Fetch from live API for this date range
+                                match fetcher.fetch_klines_batch(
+                                    &symbol,
+                                    &interval_str,
+                                    range_start,
+                                    range_end,
+                                    MAX_LIMIT,
+                                ).await {
+                                    Ok(bars) => {
+                                        info!("Successfully fetched {} bars from live API for {}", bars.len(), date_str);
+                                        let items: Vec<FetcherResult<Bar>> =
+                                            bars.into_iter().map(Ok).collect();
+                                        Some((stream::iter(items), (dates, index + 1, false)))
+                                    }
+                                    Err(api_err) => {
+                                        warn!("Live API fallback also failed for {}: {}", date_str, api_err);
+                                        // Return the API error and continue to next date
+                                        Some((stream::iter(vec![Err(api_err)]), (dates, index + 1, false)))
+                                    }
+                                }
                             }
                         }
                     }
@@ -627,16 +661,12 @@ impl BinanceFuturesUsdtFetcher {
 
 impl Clone for BinanceFuturesUsdtFetcher {
     fn clone(&self) -> Self {
-        // Create new client and rate limiter for the clone
-        let client = Client::new();
-        let rate_limiter = Arc::new(RateLimiter::weight_based(
-            2400,
-            std::time::Duration::from_secs(60),
-        ));
+        // CRITICAL: Use shared global resources to ensure rate limits are enforced
+        // across all clones. Creating new rate limiters would bypass quotas!
         let http_client = BinanceHttpClient::new(
-            client,
+            global_http_client(),
             USDT_FUTURES_CONFIG.base_url,
-            rate_limiter,
+            global_binance_rate_limiter(),
         );
 
         Self {

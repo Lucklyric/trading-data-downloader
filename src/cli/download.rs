@@ -68,6 +68,10 @@ pub struct Cli {
     /// Maximum number of retries for failed requests (default: 3)
     #[arg(long, global = true, default_value = "3")]
     pub max_retries: usize,
+
+    /// Force re-download even if output file already covers the requested range
+    #[arg(long, global = true, default_value_t = false)]
+    pub force: bool,
 }
 
 /// CLI commands
@@ -216,6 +220,108 @@ struct DownloadResult {
     error: Option<String>,
 }
 
+/// Validate that a path is safe to delete (guards against catastrophic data loss)
+fn validate_safe_delete_path(path: &PathBuf) -> Result<(), CliError> {
+    let path_str = path.to_string_lossy();
+
+    // 1. Check for dangerous Unix absolute paths
+    #[cfg(unix)]
+    {
+        if path_str == "/" || path_str == "//" ||
+           (path_str.starts_with("/Users") && path_str.matches('/').count() <= 2) ||
+           (path_str.starts_with("/home") && path_str.matches('/').count() <= 2) ||
+           path_str.starts_with("/etc") || path_str.starts_with("/var") ||
+           path_str.starts_with("/usr") || path_str.starts_with("/bin") ||
+           path_str.starts_with("/sbin") || path_str.starts_with("/lib") {
+            return Err(CliError::InvalidArgument(format!(
+                "Refusing to delete dangerous system path: {}. Resume directories should be in the current project.",
+                path_str
+            )));
+        }
+    }
+
+    // 2. Check for dangerous Windows paths
+    #[cfg(windows)]
+    {
+        // Check for drive roots (C:\, D:\, etc.)
+        if path_str.len() <= 3 && path_str.contains(":\\") {
+            return Err(CliError::InvalidArgument(format!(
+                "Refusing to delete drive root: {}. Resume directories should be in the current project.",
+                path_str
+            )));
+        }
+
+        // Check for Windows system directories
+        let lower = path_str.to_lowercase();
+        if lower.starts_with("c:\\windows") || lower.starts_with("c:\\program files") ||
+           (lower.starts_with("c:\\users") && lower.matches('\\').count() <= 2) ||
+           lower.starts_with("\\\\") {  // UNC paths
+            return Err(CliError::InvalidArgument(format!(
+                "Refusing to delete dangerous Windows path: {}. Resume directories should be in the current project.",
+                path_str
+            )));
+        }
+    }
+
+    // 3. Check for parent directory references (cross-platform)
+    if path_str.contains("..") {
+        return Err(CliError::InvalidArgument(
+            "Path contains '..' which could escape the intended directory. Use absolute paths or simple relative paths.".to_string()
+        ));
+    }
+
+    // 4. Check if path is a symlink (before canonicalization)
+    if let Ok(metadata) = path.symlink_metadata() {
+        if metadata.file_type().is_symlink() {
+            return Err(CliError::InvalidArgument(format!(
+                "Refusing to delete symlink: {}. Delete the actual directory, not the symlink.",
+                path_str
+            )));
+        }
+    }
+
+    // 5. Resolve and validate canonical path
+    if let Ok(canonical) = path.canonicalize() {
+        let canonical_str = canonical.to_string_lossy();
+        // Ensure the canonical path is still within a reasonable scope
+        #[cfg(unix)]
+        if canonical_str == "/" || canonical_str == "//" {
+            return Err(CliError::InvalidArgument(format!(
+                "Path {} resolves to dangerous location: {}",
+                path_str, canonical_str
+            )));
+        }
+
+        #[cfg(windows)]
+        if canonical_str.len() <= 3 && canonical_str.contains(":\\") {
+            return Err(CliError::InvalidArgument(format!(
+                "Path {} resolves to drive root: {}",
+                path_str, canonical_str
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Prompt user for confirmation before deleting resume directory
+fn confirm_resume_reset(resume_dir: &PathBuf) -> Result<(), CliError> {
+    eprintln!("\n!!! WARNING !!!");
+    eprintln!("About to delete resume directory: {}", resume_dir.display());
+    eprintln!("This will remove all checkpoint data and cannot be undone.");
+    eprintln!("\nType 'yes' to confirm deletion: ");
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)
+        .map_err(|e| CliError::InvalidArgument(format!("Failed to read confirmation: {}", e)))?;
+
+    if input.trim() != "yes" {
+        return Err(CliError::InvalidArgument("Reset cancelled by user.".to_string()));
+    }
+
+    Ok(())
+}
+
 impl BarsArgs {
     /// Parse start time from YYYY-MM-DD format
     fn parse_start_time(&self) -> Result<i64, CliError> {
@@ -282,10 +388,13 @@ impl BarsArgs {
                     .resume_dir
                     .clone()
                     .unwrap_or_else(|| PathBuf::from(".resume"));
-                // Clear resume state before starting
+                // CRITICAL SAFETY GUARDS: Prevent catastrophic data loss
                 if resume_dir.exists() {
+                    validate_safe_delete_path(&resume_dir)?;
+                    confirm_resume_reset(&resume_dir)?;
                     std::fs::remove_dir_all(&resume_dir)
                         .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                    eprintln!("Resume state deleted successfully.\n");
                 }
                 DownloadExecutor::new_with_resume(resume_dir)
             }
@@ -299,6 +408,11 @@ impl BarsArgs {
                 DownloadExecutor::new_with_resume(resume_dir)
             }
         };
+
+        // Apply CLI flags to executor (P0-6 fix)
+        let executor = executor
+            .with_max_retries(cli.max_retries as u32)
+            .with_force(cli.force);
 
         // Create progress bar (T087)
         let progress = create_progress_bar(&job);
@@ -401,10 +515,13 @@ impl AggTradesArgs {
                     .resume_dir
                     .clone()
                     .unwrap_or_else(|| PathBuf::from(".resume"));
-                // Clear resume state before starting
+                // CRITICAL SAFETY GUARDS: Prevent catastrophic data loss
                 if resume_dir.exists() {
+                    validate_safe_delete_path(&resume_dir)?;
+                    confirm_resume_reset(&resume_dir)?;
                     std::fs::remove_dir_all(&resume_dir)
                         .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                    eprintln!("Resume state deleted successfully.\n");
                 }
                 DownloadExecutor::new_with_resume(resume_dir)
             }
@@ -418,6 +535,11 @@ impl AggTradesArgs {
                 DownloadExecutor::new_with_resume(resume_dir)
             }
         };
+
+        // Apply CLI flags to executor (P0-6 fix)
+        let executor = executor
+            .with_max_retries(cli.max_retries as u32)
+            .with_force(cli.force);
 
         // Create progress bar
         let progress = ProgressBar::new_spinner();
@@ -665,10 +787,13 @@ impl FundingArgs {
                     .resume_dir
                     .clone()
                     .unwrap_or_else(|| PathBuf::from(".resume"));
-                // Clear resume state before starting
+                // CRITICAL SAFETY GUARDS: Prevent catastrophic data loss
                 if resume_dir.exists() {
+                    validate_safe_delete_path(&resume_dir)?;
+                    confirm_resume_reset(&resume_dir)?;
                     std::fs::remove_dir_all(&resume_dir)
                         .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                    eprintln!("Resume state deleted successfully.\n");
                 }
                 DownloadExecutor::new_with_resume(resume_dir)
             }
@@ -682,6 +807,11 @@ impl FundingArgs {
                 DownloadExecutor::new_with_resume(resume_dir)
             }
         };
+
+        // Apply CLI flags to executor (P0-6 fix)
+        let executor = executor
+            .with_max_retries(cli.max_retries as u32)
+            .with_force(cli.force);
 
         // Create progress bar
         let progress = ProgressBar::new_spinner();

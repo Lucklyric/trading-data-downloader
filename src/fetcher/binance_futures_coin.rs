@@ -3,18 +3,16 @@
 use crate::{AggTrade, Bar, ContractType, FundingRate, Interval, Symbol, TradingStatus};
 use async_trait::async_trait;
 use futures_util::{stream, StreamExt};
-use reqwest::Client;
 use rust_decimal::Decimal;
 use serde_json::Value;
 use std::str::FromStr;
-use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 use super::binance_config::COIN_FUTURES_CONFIG;
 use super::binance_http::BinanceHttpClient;
 use super::binance_parser::BinanceParser;
+use super::shared_resources::{global_binance_rate_limiter, global_http_client};
 use super::{AggTradeStream, BarStream, DataFetcher, FetcherError, FetcherResult, FundingStream};
-use crate::downloader::rate_limit::RateLimiter;
 
 const MAX_LIMIT: usize = 1500; // Binance API limit per klines request
 const AGGTRADES_LIMIT: usize = 1000; // Max aggTrades per request
@@ -28,16 +26,15 @@ pub struct BinanceFuturesCoinFetcher {
 
 impl BinanceFuturesCoinFetcher {
     /// Create a new Binance Futures COIN-margined fetcher
+    ///
+    /// Uses global shared HTTP client and rate limiter to ensure:
+    /// - Connection pooling across all download operations
+    /// - Proper rate limit enforcement across concurrent downloads
     pub fn new() -> Self {
-        let client = Client::new();
-        let rate_limiter = Arc::new(RateLimiter::weight_based(
-            2400,
-            std::time::Duration::from_secs(60),
-        ));
         let http_client = BinanceHttpClient::new(
-            client,
+            global_http_client(),
             COIN_FUTURES_CONFIG.base_url,
-            rate_limiter,
+            global_binance_rate_limiter(),
         );
 
         Self {
@@ -46,14 +43,15 @@ impl BinanceFuturesCoinFetcher {
     }
 
     /// Create with custom base URL (for testing)
+    ///
+    /// NOTE: This still uses the global rate limiter to ensure tests don't bypass quotas
     #[allow(dead_code)]
     pub fn new_with_base_url(base_url: String) -> Self {
-        let client = Client::new();
-        let rate_limiter = Arc::new(RateLimiter::weight_based(
-            2400,
-            std::time::Duration::from_secs(60),
-        ));
-        let http_client = BinanceHttpClient::new(client, base_url, rate_limiter);
+        let http_client = BinanceHttpClient::new(
+            global_http_client(),
+            base_url,
+            global_binance_rate_limiter(),
+        );
 
         Self {
             http_client,
@@ -544,16 +542,12 @@ impl BinanceFuturesCoinFetcher {
 
 impl Clone for BinanceFuturesCoinFetcher {
     fn clone(&self) -> Self {
-        // Create new client and rate limiter for the clone
-        let client = Client::new();
-        let rate_limiter = Arc::new(RateLimiter::weight_based(
-            2400,
-            std::time::Duration::from_secs(60),
-        ));
+        // CRITICAL: Use shared global resources to ensure rate limits are enforced
+        // across all clones. Creating new rate limiters would bypass quotas!
         let http_client = BinanceHttpClient::new(
-            client,
+            global_http_client(),
             COIN_FUTURES_CONFIG.base_url,
-            rate_limiter,
+            global_binance_rate_limiter(),
         );
 
         Self {

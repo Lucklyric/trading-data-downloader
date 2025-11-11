@@ -17,7 +17,7 @@ use crate::fetcher::{FetcherError, FetcherResult};
 
 /// Unified HTTP client for all Binance API interactions (T198)
 pub struct BinanceHttpClient {
-    client: Client,
+    client: Arc<Client>,
     base_url: String,
     rate_limiter: Arc<RateLimiter>,
 }
@@ -26,10 +26,10 @@ impl BinanceHttpClient {
     /// Create new HTTP client (T199)
     ///
     /// # Arguments
-    /// * `client` - Reqwest HTTP client
+    /// * `client` - Shared HTTP client (Arc for cheap cloning)
     /// * `base_url` - Base URL for API endpoints (e.g., "<https://fapi.binance.com>")
-    /// * `rate_limiter` - Rate limiter for request throttling
-    pub fn new(client: Client, base_url: impl Into<String>, rate_limiter: Arc<RateLimiter>) -> Self {
+    /// * `rate_limiter` - Shared rate limiter (Arc for global quota enforcement)
+    pub fn new(client: Arc<Client>, base_url: impl Into<String>, rate_limiter: Arc<RateLimiter>) -> Self {
         Self {
             client,
             base_url: base_url.into(),
@@ -225,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_binance_http_client_creation() {
-        let client = Client::new();
+        let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
         let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
 
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn test_parse_weight_header_valid() {
-        let client = Client::new();
+        let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
         let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
 
@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn test_parse_weight_header_missing() {
-        let client = Client::new();
+        let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
         let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
 
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_parse_weight_header_invalid() {
-        let client = Client::new();
+        let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
         let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
 
