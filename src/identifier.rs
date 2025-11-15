@@ -84,7 +84,12 @@ impl ExchangeIdentifier {
             ));
         }
 
-        Ok(Self { exchange, base, quote, settle })
+        Ok(Self {
+            exchange,
+            base,
+            quote,
+            settle,
+        })
     }
 
     /// Get the exchange component (uppercase)
@@ -132,7 +137,11 @@ impl ExchangeIdentifier {
 
 impl fmt::Display for ExchangeIdentifier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}/{}:{}", self.exchange, self.base, self.quote, self.settle)
+        write!(
+            f,
+            "{}:{}/{}:{}",
+            self.exchange, self.base, self.quote, self.settle
+        )
     }
 }
 

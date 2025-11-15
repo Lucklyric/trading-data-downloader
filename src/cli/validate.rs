@@ -1,8 +1,8 @@
 //! Validation subcommand (T181, T182)
 
-use clap::Parser;
-use crate::identifier::ExchangeIdentifier;
 use super::CliError;
+use crate::identifier::ExchangeIdentifier;
+use clap::Parser;
 use std::path::PathBuf;
 
 /// Validate command for checking identifiers and resume state
@@ -33,12 +33,8 @@ impl ValidateCommand {
     /// Execute the validation command
     pub async fn execute(&self) -> Result<(), CliError> {
         match &self.target {
-            ValidateTarget::Identifier { identifier } => {
-                self.validate_identifier(identifier)
-            }
-            ValidateTarget::ResumeState { resume_dir } => {
-                self.validate_resume_state(resume_dir)
-            }
+            ValidateTarget::Identifier { identifier } => self.validate_identifier(identifier),
+            ValidateTarget::ResumeState { resume_dir } => self.validate_resume_state(resume_dir),
         }
     }
 
@@ -46,7 +42,7 @@ impl ValidateCommand {
     fn validate_identifier(&self, identifier: &str) -> Result<(), CliError> {
         match ExchangeIdentifier::parse(identifier) {
             Ok(id) => {
-                println!("Valid identifier: {}", id);
+                println!("Valid identifier: {id}");
                 println!("  Exchange: {}", id.exchange());
                 println!("  Base: {}", id.base());
                 println!("  Quote: {}", id.quote());
@@ -55,7 +51,7 @@ impl ValidateCommand {
                 Ok(())
             }
             Err(e) => {
-                eprintln!("Invalid identifier: {}", e);
+                eprintln!("Invalid identifier: {e}");
                 Err(CliError::InvalidArgument(e.to_string()))
             }
         }
@@ -69,15 +65,16 @@ impl ValidateCommand {
         }
 
         if !resume_dir.is_dir() {
-            return Err(CliError::InvalidArgument(
-                format!("{} is not a directory", resume_dir.display())
-            ));
+            return Err(CliError::InvalidArgument(format!(
+                "{} is not a directory",
+                resume_dir.display()
+            )));
         }
 
         let state_files: Vec<_> = std::fs::read_dir(resume_dir)
-            .map_err(|e| CliError::InvalidArgument(format!("Failed to read resume dir: {}", e)))?
+            .map_err(|e| CliError::InvalidArgument(format!("Failed to read resume dir: {e}")))?
             .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
             .collect();
 
         if state_files.is_empty() {
@@ -94,32 +91,30 @@ impl ValidateCommand {
 
                 // Try to read and parse the JSON file
                 match std::fs::read_to_string(&path) {
-                    Ok(content) => {
-                        match serde_json::from_str::<serde_json::Value>(&content) {
-                            Ok(_) => {
-                                println!("  - {} (valid JSON)", filename);
-                                valid_count += 1;
-                            }
-                            Err(e) => {
-                                println!("  - {} (invalid JSON: {})", filename, e);
-                                invalid_count += 1;
-                            }
+                    Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+                        Ok(_) => {
+                            println!("  - {filename} (valid JSON)");
+                            valid_count += 1;
                         }
-                    }
+                        Err(e) => {
+                            println!("  - {filename} (invalid JSON: {e})");
+                            invalid_count += 1;
+                        }
+                    },
                     Err(e) => {
-                        println!("  - {} (cannot read: {})", filename, e);
+                        println!("  - {filename} (cannot read: {e})");
                         invalid_count += 1;
                     }
                 }
             }
 
             println!("\nSummary:");
-            println!("  Valid files: {}", valid_count);
+            println!("  Valid files: {valid_count}");
             if invalid_count > 0 {
-                println!("  Invalid files: {}", invalid_count);
-                return Err(CliError::InvalidArgument(
-                    format!("Found {} invalid resume state file(s)", invalid_count)
-                ));
+                println!("  Invalid files: {invalid_count}");
+                return Err(CliError::InvalidArgument(format!(
+                    "Found {invalid_count} invalid resume state file(s)"
+                )));
             }
         }
 

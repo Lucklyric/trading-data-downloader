@@ -95,6 +95,12 @@ pub mod registry;
 /// Resume capability for download jobs
 pub mod resume;
 
+/// Production observability metrics
+pub mod metrics;
+
+/// Graceful shutdown coordination shared across modules
+pub mod shutdown;
+
 // Re-export commonly used types
 pub use identifier::ExchangeIdentifier;
 
@@ -249,7 +255,7 @@ impl std::fmt::Display for Interval {
             Interval::OneWeek => "1w",
             Interval::OneMonth => "1M",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -273,7 +279,7 @@ impl FromStr for Interval {
             "3d" => Ok(Interval::ThreeDays),
             "1w" => Ok(Interval::OneWeek),
             "1M" => Ok(Interval::OneMonth),
-            _ => Err(format!("Invalid interval: {}", s)),
+            _ => Err(format!("Invalid interval: {s}")),
         }
     }
 }
@@ -307,7 +313,7 @@ impl std::fmt::Display for ContractType {
             ContractType::CurrentQuarterDelivering => "CURRENT_QUARTER_DELIVERING",
             ContractType::NextQuarterDelivering => "NEXT_QUARTER_DELIVERING",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -321,7 +327,7 @@ impl FromStr for ContractType {
             "NEXT_QUARTER" => Ok(ContractType::NextQuarter),
             "CURRENT_QUARTER_DELIVERING" => Ok(ContractType::CurrentQuarterDelivering),
             "NEXT_QUARTER_DELIVERING" => Ok(ContractType::NextQuarterDelivering),
-            _ => Err(format!("Invalid contract type: {}", s)),
+            _ => Err(format!("Invalid contract type: {s}")),
         }
     }
 }
@@ -355,7 +361,7 @@ impl std::fmt::Display for TradingStatus {
             TradingStatus::Delivered => "DELIVERED",
             TradingStatus::Break => "BREAK",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -369,7 +375,7 @@ impl FromStr for TradingStatus {
             "DELIVERING" => Ok(TradingStatus::Delivering),
             "DELIVERED" => Ok(TradingStatus::Delivered),
             "BREAK" => Ok(TradingStatus::Break),
-            _ => Err(format!("Invalid trading status: {}", s)),
+            _ => Err(format!("Invalid trading status: {s}")),
         }
     }
 }
@@ -473,7 +479,10 @@ impl AggTrade {
         }
 
         if self.timestamp <= 0 {
-            return Err(format!("Timestamp must be positive, got {}", self.timestamp));
+            return Err(format!(
+                "Timestamp must be positive, got {}",
+                self.timestamp
+            ));
         }
 
         if self.last_trade_id < self.first_trade_id {
@@ -518,14 +527,15 @@ impl FundingRate {
             let hour = dt.hour();
             if hour % 8 != 0 {
                 return Err(format!(
-                    "Funding time should be at 8-hour intervals (00:00, 08:00, 16:00 UTC), got hour: {}",
-                    hour
+                    "Funding time should be at 8-hour intervals (00:00, 08:00, 16:00 UTC), got hour: {hour}"
                 ));
             }
             if dt.minute() != 0 || dt.second() != 0 {
                 return Err(format!(
                     "Funding time should be at exact hour boundary, got {:02}:{:02}:{:02}",
-                    hour, dt.minute(), dt.second()
+                    hour,
+                    dt.minute(),
+                    dt.second()
                 ));
             }
         } else {

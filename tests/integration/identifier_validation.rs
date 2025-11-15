@@ -88,7 +88,10 @@ fn test_identifier_to_filesystem_safe_coin_margined() {
 #[test]
 fn test_registry_loading_from_json() {
     let registry = IdentifierRegistry::load().unwrap();
-    assert!(!registry.entries().is_empty(), "Registry should contain entries");
+    assert!(
+        !registry.entries().is_empty(),
+        "Registry should contain entries"
+    );
 }
 
 #[test]
@@ -100,9 +103,18 @@ fn test_registry_get_entry_binance_usdt() {
 
     let entry = entry.unwrap();
     assert_eq!(entry.exchange(), "BINANCE");
-    assert!(entry.capabilities().data_types().contains(&"bars".to_string()));
-    assert!(entry.capabilities().data_types().contains(&"aggtrades".to_string()));
-    assert!(entry.capabilities().data_types().contains(&"funding".to_string()));
+    assert!(entry
+        .capabilities()
+        .data_types()
+        .contains(&"bars".to_string()));
+    assert!(entry
+        .capabilities()
+        .data_types()
+        .contains(&"aggtrades".to_string()));
+    assert!(entry
+        .capabilities()
+        .data_types()
+        .contains(&"funding".to_string()));
 }
 
 #[test]
@@ -134,7 +146,10 @@ fn test_registry_validate_identifier_unsupported_exchange() {
     let registry = IdentifierRegistry::load().unwrap();
     let id = ExchangeIdentifier::parse("BYBIT:BTC/USDT:USDT").unwrap();
     let result = registry.validate_identifier(&id);
-    assert!(result.is_err(), "Unsupported exchange should fail validation");
+    assert!(
+        result.is_err(),
+        "Unsupported exchange should fail validation"
+    );
     assert!(result
         .unwrap_err()
         .to_string()

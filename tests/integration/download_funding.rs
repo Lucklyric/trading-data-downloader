@@ -2,7 +2,7 @@
 //!
 //! These tests verify the end-to-end functionality of downloading funding rate data.
 
-use chrono::{DateTime, Utc, Timelike};
+use chrono::{DateTime, Timelike, Utc};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -62,8 +62,10 @@ fn test_funding_time_alignment_validation() {
             .and_utc();
 
         assert_ne!(
-            dt.hour() % 8, 0,
-            "Hour {} should NOT be divisible by 8", hour
+            dt.hour() % 8,
+            0,
+            "Hour {} should NOT be divisible by 8",
+            hour
         );
     }
 }
@@ -72,9 +74,9 @@ fn test_funding_time_alignment_validation() {
 /// This test verifies the FundingRate struct can be created and validated correctly
 #[test]
 fn test_funding_rate_struct_validation() {
-    use trading_data_downloader::FundingRate;
     use rust_decimal::Decimal;
     use std::str::FromStr;
+    use trading_data_downloader::FundingRate;
 
     // Test valid funding rate
     let rate = FundingRate {
@@ -155,9 +157,9 @@ async fn test_csv_funding_writer_schema() {
 #[tokio::test]
 #[ignore] // Requires live API access - run manually with `cargo test --ignored`
 async fn test_download_executor_funding_job() {
+    use tempfile::TempDir;
     use trading_data_downloader::downloader::executor::DownloadExecutor;
     use trading_data_downloader::downloader::{DownloadJob, JobType};
-    use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
     let output_path = temp_dir.path().join("btcusdt_funding.csv");
@@ -181,7 +183,11 @@ async fn test_download_executor_funding_job() {
     let result = executor.execute_funding_job(job).await;
 
     // Verify successful execution
-    assert!(result.is_ok(), "Funding job execution should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Funding job execution should succeed: {:?}",
+        result.err()
+    );
     let progress = result.unwrap();
 
     // Verify output file was created
@@ -201,8 +207,8 @@ async fn test_download_executor_funding_job() {
 #[test]
 #[ignore] // Requires full CLI integration - run manually with `cargo test --ignored`
 fn test_cli_funding_command() {
-    use std::process::Command;
     use std::path::PathBuf;
+    use std::process::Command;
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
@@ -245,7 +251,16 @@ fn test_cli_funding_command() {
     // Verify output contains funding rate data
     let content = std::fs::read_to_string(&output_path).unwrap();
     assert!(content.contains("symbol"), "Output should have CSV headers");
-    assert!(content.contains("funding_rate"), "Output should have funding_rate column");
-    assert!(content.contains("funding_time"), "Output should have funding_time column");
-    assert!(content.contains("BTCUSDT"), "Output should contain symbol data");
+    assert!(
+        content.contains("funding_rate"),
+        "Output should have funding_rate column"
+    );
+    assert!(
+        content.contains("funding_time"),
+        "Output should have funding_time column"
+    );
+    assert!(
+        content.contains("BTCUSDT"),
+        "Output should contain symbol data"
+    );
 }

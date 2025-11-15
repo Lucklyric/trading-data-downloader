@@ -194,8 +194,7 @@ async fn test_coin_download_integration() {
     let end_time = chrono::Utc::now().timestamp_millis();
     let start_time = end_time - 300_000; // 5 minutes ago
 
-    let mut writer =
-        CsvBarsWriter::new(&output_path).expect("Should create CSV writer");
+    let mut writer = CsvBarsWriter::new(&output_path).expect("Should create CSV writer");
 
     let mut stream = fetcher
         .fetch_bars_stream("BTCUSD_PERP", Interval::OneMinute, start_time, end_time)
@@ -220,8 +219,5 @@ async fn test_coin_download_integration() {
     let lines: Vec<&str> = content.lines().collect();
 
     assert!(lines.len() > 1, "Should have header + data rows");
-    assert!(
-        lines[0].contains("open_time"),
-        "Should have CSV header"
-    );
+    assert!(lines[0].contains("open_time"), "Should have CSV header");
 }

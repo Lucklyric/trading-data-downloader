@@ -64,8 +64,6 @@
 //! Errors include IO failures, CSV formatting issues, and serialization problems.
 
 use crate::{AggTrade, Bar, FundingRate};
-use std::path::Path;
-
 pub mod csv;
 
 /// Output writer errors (T034)

@@ -57,7 +57,7 @@ impl ArchiveDownloader {
 
     /// Generate CHECKSUM file URL
     fn checksum_url(&self, archive_url: &str) -> String {
-        format!("{}.CHECKSUM", archive_url)
+        format!("{archive_url}.CHECKSUM")
     }
 
     /// Download and parse CHECKSUM file (T058, T061)
@@ -96,7 +96,11 @@ impl ArchiveDownloader {
     }
 
     /// Download archive file to temporary location (T063)
-    async fn download_archive(&self, archive_url: &str, temp_dir: &TempDir) -> FetcherResult<(PathBuf, Bytes)> {
+    async fn download_archive(
+        &self,
+        archive_url: &str,
+        temp_dir: &TempDir,
+    ) -> FetcherResult<(PathBuf, Bytes)> {
         debug!("Downloading archive from {}", archive_url);
 
         let response = self
@@ -121,14 +125,18 @@ impl ArchiveDownloader {
         // Write to temporary file
         let filename = archive_url
             .split('/')
-            .last()
+            .next_back()
             .ok_or_else(|| FetcherError::ArchiveError("Invalid archive URL".to_string()))?;
         let temp_path = temp_dir.path().join(filename);
 
         std::fs::write(&temp_path, &archive_bytes)
-            .map_err(|e| FetcherError::ArchiveError(format!("Failed to write temp file: {}", e)))?;
+            .map_err(|e| FetcherError::ArchiveError(format!("Failed to write temp file: {e}")))?;
 
-        debug!("Downloaded {} bytes to {:?}", archive_bytes.len(), temp_path);
+        debug!(
+            "Downloaded {} bytes to {:?}",
+            archive_bytes.len(),
+            temp_path
+        );
         Ok((temp_path, archive_bytes))
     }
 
@@ -168,32 +176,32 @@ impl ArchiveDownloader {
 
         let open_time = fields[0]
             .parse::<i64>()
-            .map_err(|e| FetcherError::ParseError(format!("Invalid open_time: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid open_time: {e}")))?;
 
         let close_time = fields[6]
             .parse::<i64>()
-            .map_err(|e| FetcherError::ParseError(format!("Invalid close_time: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid close_time: {e}")))?;
 
         let trades = fields[8]
             .parse::<u64>()
-            .map_err(|e| FetcherError::ParseError(format!("Invalid trades: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid trades: {e}")))?;
 
         let open = Decimal::from_str(fields[1])
-            .map_err(|e| FetcherError::ParseError(format!("Invalid open: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid open: {e}")))?;
         let high = Decimal::from_str(fields[2])
-            .map_err(|e| FetcherError::ParseError(format!("Invalid high: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid high: {e}")))?;
         let low = Decimal::from_str(fields[3])
-            .map_err(|e| FetcherError::ParseError(format!("Invalid low: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid low: {e}")))?;
         let close = Decimal::from_str(fields[4])
-            .map_err(|e| FetcherError::ParseError(format!("Invalid close: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid close: {e}")))?;
         let volume = Decimal::from_str(fields[5])
-            .map_err(|e| FetcherError::ParseError(format!("Invalid volume: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid volume: {e}")))?;
         let quote_volume = Decimal::from_str(fields[7])
-            .map_err(|e| FetcherError::ParseError(format!("Invalid quote_volume: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid quote_volume: {e}")))?;
         let taker_buy_base_volume = Decimal::from_str(fields[9])
-            .map_err(|e| FetcherError::ParseError(format!("Invalid taker_buy_base: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid taker_buy_base: {e}")))?;
         let taker_buy_quote_volume = Decimal::from_str(fields[10])
-            .map_err(|e| FetcherError::ParseError(format!("Invalid taker_buy_quote: {}", e)))?;
+            .map_err(|e| FetcherError::ParseError(format!("Invalid taker_buy_quote: {e}")))?;
 
         Ok(Bar {
             open_time,
@@ -215,7 +223,7 @@ impl ArchiveDownloader {
     fn extract_bars_from_zip(&self, archive_bytes: &[u8]) -> FetcherResult<Vec<Bar>> {
         let cursor = Cursor::new(archive_bytes);
         let mut archive = ZipArchive::new(cursor)
-            .map_err(|e| FetcherError::ArchiveError(format!("Failed to open ZIP: {}", e)))?;
+            .map_err(|e| FetcherError::ArchiveError(format!("Failed to open ZIP: {e}")))?;
 
         if archive.len() != 1 {
             return Err(FetcherError::ArchiveError(format!(
@@ -224,13 +232,14 @@ impl ArchiveDownloader {
             )));
         }
 
-        let mut file = archive.by_index(0)
-            .map_err(|e| FetcherError::ArchiveError(format!("Failed to read ZIP entry: {}", e)))?;
+        let mut file = archive
+            .by_index(0)
+            .map_err(|e| FetcherError::ArchiveError(format!("Failed to read ZIP entry: {e}")))?;
 
         // Read CSV contents
         let mut csv_content = String::new();
         file.read_to_string(&mut csv_content)
-            .map_err(|e| FetcherError::ArchiveError(format!("Failed to read CSV: {}", e)))?;
+            .map_err(|e| FetcherError::ArchiveError(format!("Failed to read CSV: {e}")))?;
 
         debug!("Extracting bars from {} byte CSV", csv_content.len());
 
@@ -250,7 +259,12 @@ impl ArchiveDownloader {
             match Self::parse_csv_line(line) {
                 Ok(bar) => bars.push(bar),
                 Err(e) => {
-                    warn!("Failed to parse line {}: {} (error: {})", line_num + 1, line, e);
+                    warn!(
+                        "Failed to parse line {}: {} (error: {})",
+                        line_num + 1,
+                        line,
+                        e
+                    );
                     // Continue parsing other lines
                 }
             }
@@ -281,7 +295,7 @@ impl ArchiveDownloader {
 
         // Step 2: Create temporary directory
         let temp_dir = TempDir::new()
-            .map_err(|e| FetcherError::ArchiveError(format!("Failed to create temp dir: {}", e)))?;
+            .map_err(|e| FetcherError::ArchiveError(format!("Failed to create temp dir: {e}")))?;
 
         // Step 3: Download archive
         let (_temp_path, archive_bytes) = self.download_archive(&archive_url, &temp_dir).await?;
@@ -326,10 +340,9 @@ impl ArchiveDownloader {
 
     /// Generate date range for archive downloads (T057)
     pub fn date_range_for_timestamps(start_time: i64, end_time: i64) -> Vec<NaiveDate> {
-        let start_dt = DateTime::from_timestamp_millis(start_time)
-            .expect("Invalid start timestamp");
-        let end_dt = DateTime::from_timestamp_millis(end_time)
-            .expect("Invalid end timestamp");
+        let start_dt =
+            DateTime::from_timestamp_millis(start_time).expect("Invalid start timestamp");
+        let end_dt = DateTime::from_timestamp_millis(end_time).expect("Invalid end timestamp");
 
         let start_date = start_dt.date_naive();
         let end_date = end_dt.date_naive();
@@ -426,13 +439,16 @@ mod tests {
         // Recent data (12 hours ago)
         let recent_start = now - (12 * 3600 * 1000);
         let recent_end = now;
-        assert!(!ArchiveDownloader::should_use_archive(recent_start, recent_end));
+        assert!(!ArchiveDownloader::should_use_archive(
+            recent_start,
+            recent_end
+        ));
     }
 
     #[test]
     fn test_date_range_generation() {
         let start_time = 1704067200000; // 2024-01-01 00:00:00 UTC
-        let end_time = 1704326400000;   // 2024-01-04 00:00:00 UTC
+        let end_time = 1704326400000; // 2024-01-04 00:00:00 UTC
 
         let dates = ArchiveDownloader::date_range_for_timestamps(start_time, end_time);
 

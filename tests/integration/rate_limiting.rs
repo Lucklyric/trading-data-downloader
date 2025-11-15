@@ -63,7 +63,10 @@ async fn test_rate_limiter_handle_429_exponential_backoff() {
 
     // Simulate second 429 response (should be longer)
     let delay2 = limiter.handle_rate_limit_error(2).await;
-    assert!(delay2 > delay1, "Second delay should be longer (exponential)");
+    assert!(
+        delay2 > delay1,
+        "Second delay should be longer (exponential)"
+    );
 
     // Simulate third 429 response (should be even longer)
     let delay3 = limiter.handle_rate_limit_error(3).await;

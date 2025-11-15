@@ -17,7 +17,10 @@ impl Checkpoint {
     /// Create a time window checkpoint (end-exclusive semantics)
     pub fn time_window(start_time: i64, end_time: i64, record_count: u64, byte_count: u64) -> Self {
         Self {
-            checkpoint_type: CheckpointType::TimeWindow { start_time, end_time },
+            checkpoint_type: CheckpointType::TimeWindow {
+                start_time,
+                end_time,
+            },
             record_count,
             byte_count,
             completed_at: chrono::Utc::now().timestamp_millis(),

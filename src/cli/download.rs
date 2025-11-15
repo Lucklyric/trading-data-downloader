@@ -1,12 +1,13 @@
 //! Download command implementation (T082-T087)
 
 use crate::downloader::{DownloadExecutor, DownloadJob, JobProgress};
+use crate::shutdown::SharedShutdown;
 use crate::Interval;
-use chrono::{DateTime, FixedOffset, NaiveDate};
+use chrono::{DateTime, NaiveDate};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::{error, info};
 
@@ -34,7 +35,9 @@ impl FromStr for ResumeMode {
             "on" => Ok(ResumeMode::On),
             "reset" => Ok(ResumeMode::Reset),
             "verify" => Ok(ResumeMode::Verify),
-            _ => Err(format!("Invalid resume mode: {}. Valid options: on, off, reset, verify", s)),
+            _ => Err(format!(
+                "Invalid resume mode: {s}. Valid options: on, off, reset, verify"
+            )),
         }
     }
 }
@@ -198,7 +201,7 @@ impl FromStr for OutputFormat {
         match s.to_lowercase().as_str() {
             "json" => Ok(OutputFormat::Json),
             "human" => Ok(OutputFormat::Human),
-            _ => Err(format!("Invalid output format: {}", s)),
+            _ => Err(format!("Invalid output format: {s}")),
         }
     }
 }
@@ -221,21 +224,25 @@ struct DownloadResult {
 }
 
 /// Validate that a path is safe to delete (guards against catastrophic data loss)
-fn validate_safe_delete_path(path: &PathBuf) -> Result<(), CliError> {
+fn validate_safe_delete_path(path: &Path) -> Result<(), CliError> {
     let path_str = path.to_string_lossy();
 
     // 1. Check for dangerous Unix absolute paths
     #[cfg(unix)]
     {
-        if path_str == "/" || path_str == "//" ||
-           (path_str.starts_with("/Users") && path_str.matches('/').count() <= 2) ||
-           (path_str.starts_with("/home") && path_str.matches('/').count() <= 2) ||
-           path_str.starts_with("/etc") || path_str.starts_with("/var") ||
-           path_str.starts_with("/usr") || path_str.starts_with("/bin") ||
-           path_str.starts_with("/sbin") || path_str.starts_with("/lib") {
+        if path_str == "/"
+            || path_str == "//"
+            || (path_str.starts_with("/Users") && path_str.matches('/').count() <= 2)
+            || (path_str.starts_with("/home") && path_str.matches('/').count() <= 2)
+            || path_str.starts_with("/etc")
+            || path_str.starts_with("/var")
+            || path_str.starts_with("/usr")
+            || path_str.starts_with("/bin")
+            || path_str.starts_with("/sbin")
+            || path_str.starts_with("/lib")
+        {
             return Err(CliError::InvalidArgument(format!(
-                "Refusing to delete dangerous system path: {}. Resume directories should be in the current project.",
-                path_str
+                "Refusing to delete dangerous system path: {path_str}. Resume directories should be in the current project."
             )));
         }
     }
@@ -246,19 +253,20 @@ fn validate_safe_delete_path(path: &PathBuf) -> Result<(), CliError> {
         // Check for drive roots (C:\, D:\, etc.)
         if path_str.len() <= 3 && path_str.contains(":\\") {
             return Err(CliError::InvalidArgument(format!(
-                "Refusing to delete drive root: {}. Resume directories should be in the current project.",
-                path_str
+                "Refusing to delete drive root: {path_str}. Resume directories should be in the current project."
             )));
         }
 
         // Check for Windows system directories
         let lower = path_str.to_lowercase();
-        if lower.starts_with("c:\\windows") || lower.starts_with("c:\\program files") ||
-           (lower.starts_with("c:\\users") && lower.matches('\\').count() <= 2) ||
-           lower.starts_with("\\\\") {  // UNC paths
+        if lower.starts_with("c:\\windows")
+            || lower.starts_with("c:\\program files")
+            || (lower.starts_with("c:\\users") && lower.matches('\\').count() <= 2)
+            || lower.starts_with("\\\\")
+        {
+            // UNC paths
             return Err(CliError::InvalidArgument(format!(
-                "Refusing to delete dangerous Windows path: {}. Resume directories should be in the current project.",
-                path_str
+                "Refusing to delete dangerous Windows path: {path_str}. Resume directories should be in the current project."
             )));
         }
     }
@@ -274,8 +282,7 @@ fn validate_safe_delete_path(path: &PathBuf) -> Result<(), CliError> {
     if let Ok(metadata) = path.symlink_metadata() {
         if metadata.file_type().is_symlink() {
             return Err(CliError::InvalidArgument(format!(
-                "Refusing to delete symlink: {}. Delete the actual directory, not the symlink.",
-                path_str
+                "Refusing to delete symlink: {path_str}. Delete the actual directory, not the symlink."
             )));
         }
     }
@@ -287,16 +294,14 @@ fn validate_safe_delete_path(path: &PathBuf) -> Result<(), CliError> {
         #[cfg(unix)]
         if canonical_str == "/" || canonical_str == "//" {
             return Err(CliError::InvalidArgument(format!(
-                "Path {} resolves to dangerous location: {}",
-                path_str, canonical_str
+                "Path {path_str} resolves to dangerous location: {canonical_str}"
             )));
         }
 
         #[cfg(windows)]
         if canonical_str.len() <= 3 && canonical_str.contains(":\\") {
             return Err(CliError::InvalidArgument(format!(
-                "Path {} resolves to drive root: {}",
-                path_str, canonical_str
+                "Path {path_str} resolves to drive root: {canonical_str}"
             )));
         }
     }
@@ -305,18 +310,21 @@ fn validate_safe_delete_path(path: &PathBuf) -> Result<(), CliError> {
 }
 
 /// Prompt user for confirmation before deleting resume directory
-fn confirm_resume_reset(resume_dir: &PathBuf) -> Result<(), CliError> {
+fn confirm_resume_reset(resume_dir: &Path) -> Result<(), CliError> {
     eprintln!("\n!!! WARNING !!!");
     eprintln!("About to delete resume directory: {}", resume_dir.display());
     eprintln!("This will remove all checkpoint data and cannot be undone.");
     eprintln!("\nType 'yes' to confirm deletion: ");
 
     let mut input = String::new();
-    std::io::stdin().read_line(&mut input)
-        .map_err(|e| CliError::InvalidArgument(format!("Failed to read confirmation: {}", e)))?;
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| CliError::InvalidArgument(format!("Failed to read confirmation: {e}")))?;
 
     if input.trim() != "yes" {
-        return Err(CliError::InvalidArgument("Reset cancelled by user.".to_string()));
+        return Err(CliError::InvalidArgument(
+            "Reset cancelled by user.".to_string(),
+        ));
     }
 
     Ok(())
@@ -326,7 +334,7 @@ impl BarsArgs {
     /// Parse start time from YYYY-MM-DD format
     fn parse_start_time(&self) -> Result<i64, CliError> {
         let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {}", e)))?;
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {e}")))?;
 
         let datetime = date
             .and_hms_opt(0, 0, 0)
@@ -338,7 +346,7 @@ impl BarsArgs {
     /// Parse end time from YYYY-MM-DD format
     fn parse_end_time(&self) -> Result<i64, CliError> {
         let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {}", e)))?;
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
 
         let datetime = date
             .and_hms_opt(0, 0, 0)
@@ -350,18 +358,22 @@ impl BarsArgs {
     /// Get output path or generate default
     fn get_output_path(&self) -> PathBuf {
         self.output.clone().unwrap_or_else(|| {
-            PathBuf::from(format!("{}_{}.csv", self.symbol.to_lowercase(), self.interval))
+            PathBuf::from(format!(
+                "{}_{}.csv",
+                self.symbol.to_lowercase(),
+                self.interval
+            ))
         })
     }
 
     /// Execute bars download (T086-T087)
-    pub async fn execute(&self, cli: &Cli) -> Result<(), CliError> {
+    pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
         let output_path = self.get_output_path();
 
         let interval = Interval::from_str(&self.interval)
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {}", e)))?;
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
 
         // Create download job
         let job = DownloadJob::new(
@@ -392,8 +404,9 @@ impl BarsArgs {
                 if resume_dir.exists() {
                     validate_safe_delete_path(&resume_dir)?;
                     confirm_resume_reset(&resume_dir)?;
-                    std::fs::remove_dir_all(&resume_dir)
-                        .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                    std::fs::remove_dir_all(&resume_dir).map_err(|e| {
+                        CliError::InvalidArgument(format!("Failed to reset resume state: {e}"))
+                    })?;
                     eprintln!("Resume state deleted successfully.\n");
                 }
                 DownloadExecutor::new_with_resume(resume_dir)
@@ -412,7 +425,8 @@ impl BarsArgs {
         // Apply CLI flags to executor (P0-6 fix)
         let executor = executor
             .with_max_retries(cli.max_retries as u32)
-            .with_force(cli.force);
+            .with_force(cli.force)
+            .with_shutdown(shutdown);
 
         // Create progress bar (T087)
         let progress = create_progress_bar(&job);
@@ -451,7 +465,7 @@ impl AggTradesArgs {
 
         // Fall back to date-only format
         let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {}", e)))?;
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {e}")))?;
 
         let datetime = date
             .and_hms_opt(0, 0, 0)
@@ -469,7 +483,7 @@ impl AggTradesArgs {
 
         // Fall back to date-only format
         let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {}", e)))?;
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
 
         let datetime = date
             .and_hms_opt(0, 0, 0)
@@ -480,13 +494,13 @@ impl AggTradesArgs {
 
     /// Get output path or generate default
     fn get_output_path(&self) -> PathBuf {
-        self.output.clone().unwrap_or_else(|| {
-            PathBuf::from(format!("{}_trades.csv", self.symbol.to_lowercase()))
-        })
+        self.output
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(format!("{}_trades.csv", self.symbol.to_lowercase())))
     }
 
     /// Execute aggTrades download (T129)
-    pub async fn execute(&self, cli: &Cli) -> Result<(), CliError> {
+    pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
         let output_path = self.get_output_path();
@@ -519,8 +533,9 @@ impl AggTradesArgs {
                 if resume_dir.exists() {
                     validate_safe_delete_path(&resume_dir)?;
                     confirm_resume_reset(&resume_dir)?;
-                    std::fs::remove_dir_all(&resume_dir)
-                        .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                    std::fs::remove_dir_all(&resume_dir).map_err(|e| {
+                        CliError::InvalidArgument(format!("Failed to reset resume state: {e}"))
+                    })?;
                     eprintln!("Resume state deleted successfully.\n");
                 }
                 DownloadExecutor::new_with_resume(resume_dir)
@@ -539,7 +554,8 @@ impl AggTradesArgs {
         // Apply CLI flags to executor (P0-6 fix)
         let executor = executor
             .with_max_retries(cli.max_retries as u32)
-            .with_force(cli.force);
+            .with_force(cli.force)
+            .with_shutdown(shutdown);
 
         // Create progress bar
         let progress = ProgressBar::new_spinner();
@@ -576,7 +592,10 @@ fn create_progress_bar(job: &DownloadJob) -> ProgressBar {
             let interval_ms = interval.to_milliseconds();
             let total_duration = job.end_time - job.start_time;
             let total_bars = ((total_duration + interval_ms - 1) / interval_ms) as u64;
-            (total_bars, format!("Downloading {} {}", job.symbol, interval))
+            (
+                total_bars,
+                format!("Downloading {} {}", job.symbol, interval),
+            )
         }
         _ => (0, format!("Downloading {}", job.symbol)),
     };
@@ -593,7 +612,10 @@ fn create_progress_bar(job: &DownloadJob) -> ProgressBar {
 }
 
 /// Output result as JSON (T086)
-fn output_json_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+fn output_json_result(
+    job: &DownloadJob,
+    result: &Result<JobProgress, crate::downloader::DownloadError>,
+) {
     let interval_str = match job.job_type {
         crate::downloader::JobType::Bars { interval } => interval.to_string(),
         _ => "N/A".to_string(),
@@ -634,7 +656,10 @@ fn output_json_result(job: &DownloadJob, result: &Result<JobProgress, crate::dow
 }
 
 /// Output result in human-readable format (T086)
-fn output_human_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+fn output_human_result(
+    job: &DownloadJob,
+    result: &Result<JobProgress, crate::downloader::DownloadError>,
+) {
     match result {
         Ok(progress) => {
             println!("\nDownload completed successfully!");
@@ -650,14 +675,17 @@ fn output_human_result(job: &DownloadJob, result: &Result<JobProgress, crate::do
         }
         Err(e) => {
             eprintln!("\nDownload failed!");
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
             error!("Download failed: {}", e);
         }
     }
 }
 
 /// Output aggTrades result as JSON
-fn output_aggtrades_json_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+fn output_aggtrades_json_result(
+    job: &DownloadJob,
+    result: &Result<JobProgress, crate::downloader::DownloadError>,
+) {
     let output = match result {
         Ok(progress) => serde_json::json!({
             "success": true,
@@ -693,7 +721,10 @@ fn output_aggtrades_json_result(job: &DownloadJob, result: &Result<JobProgress, 
 }
 
 /// Output aggTrades result in human-readable format
-fn output_aggtrades_human_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+fn output_aggtrades_human_result(
+    job: &DownloadJob,
+    result: &Result<JobProgress, crate::downloader::DownloadError>,
+) {
     match result {
         Ok(progress) => {
             println!("\nAggTrades download completed successfully!");
@@ -707,7 +738,7 @@ fn output_aggtrades_human_result(job: &DownloadJob, result: &Result<JobProgress,
         }
         Err(e) => {
             eprintln!("\nAggTrades download failed!");
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
             error!("Download failed: {}", e);
         }
     }
@@ -723,7 +754,7 @@ impl FundingArgs {
 
         // Fall back to date-only format
         let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {}", e)))?;
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {e}")))?;
 
         let datetime = date
             .and_hms_opt(0, 0, 0)
@@ -741,7 +772,7 @@ impl FundingArgs {
 
         // Fall back to date-only format
         let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {}", e)))?;
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
 
         let datetime = date
             .and_hms_opt(0, 0, 0)
@@ -752,13 +783,13 @@ impl FundingArgs {
 
     /// Get output path or generate default
     fn get_output_path(&self) -> PathBuf {
-        self.output.clone().unwrap_or_else(|| {
-            PathBuf::from(format!("{}_funding.csv", self.symbol.to_lowercase()))
-        })
+        self.output
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(format!("{}_funding.csv", self.symbol.to_lowercase())))
     }
 
     /// Execute funding rates download (T151)
-    pub async fn execute(&self, cli: &Cli) -> Result<(), CliError> {
+    pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
         let output_path = self.get_output_path();
@@ -791,8 +822,9 @@ impl FundingArgs {
                 if resume_dir.exists() {
                     validate_safe_delete_path(&resume_dir)?;
                     confirm_resume_reset(&resume_dir)?;
-                    std::fs::remove_dir_all(&resume_dir)
-                        .map_err(|e| CliError::InvalidArgument(format!("Failed to reset resume state: {}", e)))?;
+                    std::fs::remove_dir_all(&resume_dir).map_err(|e| {
+                        CliError::InvalidArgument(format!("Failed to reset resume state: {e}"))
+                    })?;
                     eprintln!("Resume state deleted successfully.\n");
                 }
                 DownloadExecutor::new_with_resume(resume_dir)
@@ -811,7 +843,8 @@ impl FundingArgs {
         // Apply CLI flags to executor (P0-6 fix)
         let executor = executor
             .with_max_retries(cli.max_retries as u32)
-            .with_force(cli.force);
+            .with_force(cli.force)
+            .with_shutdown(shutdown);
 
         // Create progress bar
         let progress = ProgressBar::new_spinner();
@@ -842,7 +875,10 @@ impl FundingArgs {
 }
 
 /// Output funding result as JSON
-fn output_funding_json_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+fn output_funding_json_result(
+    job: &DownloadJob,
+    result: &Result<JobProgress, crate::downloader::DownloadError>,
+) {
     let output = match result {
         Ok(progress) => serde_json::json!({
             "success": true,
@@ -878,7 +914,10 @@ fn output_funding_json_result(job: &DownloadJob, result: &Result<JobProgress, cr
 }
 
 /// Output funding result in human-readable format
-fn output_funding_human_result(job: &DownloadJob, result: &Result<JobProgress, crate::downloader::DownloadError>) {
+fn output_funding_human_result(
+    job: &DownloadJob,
+    result: &Result<JobProgress, crate::downloader::DownloadError>,
+) {
     match result {
         Ok(progress) => {
             println!("\nFunding rates download completed successfully!");
@@ -892,7 +931,7 @@ fn output_funding_human_result(job: &DownloadJob, result: &Result<JobProgress, c
         }
         Err(e) => {
             eprintln!("\nFunding rates download failed!");
-            eprintln!("Error: {}", e);
+            eprintln!("Error: {e}");
             error!("Download failed: {}", e);
         }
     }

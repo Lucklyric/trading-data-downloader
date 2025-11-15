@@ -63,9 +63,8 @@ impl PaginationHelper {
             // Safety check: prevent infinite loops (T222)
             if iteration >= MAX_ITERATIONS {
                 return Err(FetcherError::ApiError(format!(
-                    "Max iterations ({}) exceeded for symbol {} - possible infinite loop. Last timestamp: {}",
-                    MAX_ITERATIONS, symbol, current_start
-                )));
+                        "Max iterations ({MAX_ITERATIONS}) exceeded for symbol {symbol} - possible infinite loop. Last timestamp: {current_start}"
+                    )));
             }
 
             // Check if we've reached the end
@@ -167,9 +166,8 @@ impl PaginationHelper {
             // Safety check: prevent infinite loops (T222)
             if iteration >= MAX_ITERATIONS {
                 return Err(FetcherError::ApiError(format!(
-                    "Max iterations ({}) exceeded for symbol {} - possible infinite loop. Last trade ID: {:?}",
-                    MAX_ITERATIONS, symbol, current_from_id
-                )));
+                        "Max iterations ({MAX_ITERATIONS}) exceeded for symbol {symbol} - possible infinite loop. Last trade ID: {current_from_id:?}"
+                    )));
             }
 
             // Build parameters for this page
@@ -263,9 +261,8 @@ impl PaginationHelper {
             // Safety check: prevent infinite loops (T222)
             if iteration >= MAX_ITERATIONS {
                 return Err(FetcherError::ApiError(format!(
-                    "Max iterations ({}) exceeded for symbol {} - possible infinite loop. Last timestamp: {}",
-                    MAX_ITERATIONS, symbol, current_start
-                )));
+                        "Max iterations ({MAX_ITERATIONS}) exceeded for symbol {symbol} - possible infinite loop. Last timestamp: {current_start}"
+                    )));
             }
 
             // Check if we've reached the end
@@ -306,7 +303,11 @@ impl PaginationHelper {
                 break;
             }
 
-            debug!("Received {} funding rates in page {}", page.len(), iteration + 1);
+            debug!(
+                "Received {} funding rates in page {}",
+                page.len(),
+                iteration + 1
+            );
 
             // Get last funding_time to advance pagination
             let last_funding_time = page.last().unwrap().funding_time;

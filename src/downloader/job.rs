@@ -10,7 +10,7 @@ pub enum JobType {
     /// OHLCV bars
     Bars {
         /// Time interval for candlestick aggregation
-        interval: Interval
+        interval: Interval,
     },
     /// Aggregate trades
     AggTrades,
@@ -117,7 +117,14 @@ impl DownloadJob {
         end_time: i64,
         output_path: PathBuf,
     ) -> Self {
-        Self::new_bars(identifier, symbol, interval, start_time, end_time, output_path)
+        Self::new_bars(
+            identifier,
+            symbol,
+            interval,
+            start_time,
+            end_time,
+            output_path,
+        )
     }
 
     /// Validate job parameters
@@ -142,9 +149,10 @@ impl DownloadJob {
 }
 
 /// Job execution status (T047)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum JobStatus {
     /// Job has not started yet
+    #[default]
     Pending,
     /// Job is currently running
     InProgress,
@@ -156,14 +164,8 @@ pub enum JobStatus {
     Cancelled,
 }
 
-impl Default for JobStatus {
-    fn default() -> Self {
-        JobStatus::Pending
-    }
-}
-
 /// Job progress tracking (T047)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct JobProgress {
     /// Total number of bars expected
     pub total_bars: Option<u64>,
@@ -179,20 +181,6 @@ pub struct JobProgress {
     pub retries: u64,
     /// Error message if job failed
     pub error: Option<String>,
-}
-
-impl Default for JobProgress {
-    fn default() -> Self {
-        Self {
-            total_bars: None,
-            downloaded_bars: 0,
-            written_bars: 0,
-            current_position: None,
-            api_requests: 0,
-            retries: 0,
-            error: None,
-        }
-    }
 }
 
 impl JobProgress {

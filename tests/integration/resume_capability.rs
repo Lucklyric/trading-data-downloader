@@ -64,7 +64,12 @@ fn test_resume_state_schema_version_present() {
 fn test_checkpoint_time_window_end_exclusive_semantics() {
     let checkpoint = Checkpoint::time_window(1699920000000, 1699920060000, 60, 4096);
 
-    if let CheckpointType::TimeWindow { start_time, end_time, .. } = checkpoint.checkpoint_type() {
+    if let CheckpointType::TimeWindow {
+        start_time,
+        end_time,
+        ..
+    } = checkpoint.checkpoint_type()
+    {
         assert_eq!(*start_time, 1699920000000);
         assert_eq!(*end_time, 1699920060000);
         // end_time is exclusive: next checkpoint should start at 1699920060000
@@ -104,7 +109,10 @@ fn test_checkpoint_archive_file_type() {
         Some("a3c5d8e9f0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7".to_string()),
     );
 
-    if let CheckpointType::ArchiveFile { cursor, checksum, .. } = checkpoint.checkpoint_type() {
+    if let CheckpointType::ArchiveFile {
+        cursor, checksum, ..
+    } = checkpoint.checkpoint_type()
+    {
         assert_eq!(cursor, "BTCUSDT-aggTrades-2023-11.zip");
         assert!(checksum.is_some());
     } else {
@@ -152,7 +160,12 @@ fn test_resume_state_load_from_file() {
         Some("1m".to_string()),
         "bars".to_string(),
     );
-    original_state.add_checkpoint(Checkpoint::time_window(1699920000000, 1699920060000, 60, 4096));
+    original_state.add_checkpoint(Checkpoint::time_window(
+        1699920000000,
+        1699920060000,
+        60,
+        4096,
+    ));
 
     original_state.save(&state_path).unwrap();
 
@@ -339,7 +352,10 @@ fn test_resume_state_file_corruption_prevention() {
         .collect();
 
     // Should only have the state file and lock file, no temp files
-    let temp_files: Vec<_> = entries.iter().filter(|name| name.contains(".tmp")).collect();
+    let temp_files: Vec<_> = entries
+        .iter()
+        .filter(|name| name.contains(".tmp"))
+        .collect();
     assert_eq!(
         temp_files.len(),
         0,
@@ -473,7 +489,9 @@ fn test_concurrent_writers_atomicity() {
     assert!(final_state.checkpoints().len() <= 5);
 
     // Verify metadata is consistent with checkpoints
-    let total_records: u64 = final_state.checkpoints().iter()
+    let total_records: u64 = final_state
+        .checkpoints()
+        .iter()
         .map(|c| c.record_count())
         .sum();
     assert_eq!(final_state.metadata().total_records(), total_records);
@@ -502,7 +520,12 @@ fn test_concurrent_mixed_read_write() {
         Some("1m".to_string()),
         "bars".to_string(),
     );
-    state.add_checkpoint(Checkpoint::time_window(1699920000000, 1699920060000, 60, 4096));
+    state.add_checkpoint(Checkpoint::time_window(
+        1699920000000,
+        1699920060000,
+        60,
+        4096,
+    ));
     state.save(&state_path).unwrap();
 
     // Barrier to synchronize thread start
@@ -525,7 +548,9 @@ fn test_concurrent_mixed_read_write() {
             assert!(loaded_state.validate_schema_version().is_ok());
 
             // Verify metadata consistency
-            let total_records: u64 = loaded_state.checkpoints().iter()
+            let total_records: u64 = loaded_state
+                .checkpoints()
+                .iter()
                 .map(|c| c.record_count())
                 .sum();
             assert_eq!(loaded_state.metadata().total_records(), total_records);
@@ -582,7 +607,12 @@ fn test_atomic_write_crash_safety() {
         Some("1m".to_string()),
         "bars".to_string(),
     );
-    initial_state.add_checkpoint(Checkpoint::time_window(1699920000000, 1699920060000, 60, 4096));
+    initial_state.add_checkpoint(Checkpoint::time_window(
+        1699920000000,
+        1699920060000,
+        60,
+        4096,
+    ));
     initial_state.save(&state_path).unwrap();
 
     // Load and verify initial state
@@ -617,8 +647,15 @@ fn test_atomic_write_crash_safety() {
         .map(|e| e.file_name().to_string_lossy().to_string())
         .collect();
 
-    let temp_files: Vec<_> = entries.iter().filter(|name| name.contains(".tmp")).collect();
-    assert_eq!(temp_files.len(), 0, "Found unexpected temp files after crash simulation");
+    let temp_files: Vec<_> = entries
+        .iter()
+        .filter(|name| name.contains(".tmp"))
+        .collect();
+    assert_eq!(
+        temp_files.len(),
+        0,
+        "Found unexpected temp files after crash simulation"
+    );
 }
 
 /// Test E: High-Concurrency Stress Test
@@ -683,7 +720,9 @@ fn test_high_concurrency_stress() {
     assert!(final_state.validate_schema_version().is_ok());
 
     // Verify metadata consistency
-    let total_records: u64 = final_state.checkpoints().iter()
+    let total_records: u64 = final_state
+        .checkpoints()
+        .iter()
         .map(|c| c.record_count())
         .sum();
     assert_eq!(final_state.metadata().total_records(), total_records);

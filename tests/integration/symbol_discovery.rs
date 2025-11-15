@@ -54,9 +54,9 @@ async fn test_symbol_discovery_integration() {
 /// This test verifies the Symbol struct can be created and validated
 #[test]
 fn test_symbol_struct_validation() {
-    use trading_data_downloader::Symbol;
     use rust_decimal::Decimal;
     use std::str::FromStr;
+    use trading_data_downloader::Symbol;
 
     // Create a Symbol with valid data
     let symbol = Symbol {
@@ -114,13 +114,19 @@ async fn test_list_symbols_method() {
     let fetcher = BinanceFuturesUsdtFetcher::new();
 
     // Call list_symbols()
-    let symbols = fetcher.list_symbols().await.expect("Failed to list symbols");
+    let symbols = fetcher
+        .list_symbols()
+        .await
+        .expect("Failed to list symbols");
 
     // Verify response parsing works
     assert!(!symbols.is_empty(), "Should have symbols");
 
     // Verify filtering works (TRADING status)
-    let trading_count = symbols.iter().filter(|s| s.status == TradingStatus::Trading).count();
+    let trading_count = symbols
+        .iter()
+        .filter(|s| s.status == TradingStatus::Trading)
+        .count();
     assert!(trading_count > 0, "Should have TRADING symbols");
 
     // Verify filtering works (PERPETUAL contracts)
@@ -132,8 +138,14 @@ async fn test_list_symbols_method() {
 
     // Verify tick_size and step_size are present
     for symbol in symbols.iter().take(5) {
-        assert!(symbol.tick_size > rust_decimal::Decimal::ZERO, "Tick size should be positive");
-        assert!(symbol.step_size > rust_decimal::Decimal::ZERO, "Step size should be positive");
+        assert!(
+            symbol.tick_size > rust_decimal::Decimal::ZERO,
+            "Tick size should be positive"
+        );
+        assert!(
+            symbol.step_size > rust_decimal::Decimal::ZERO,
+            "Step size should be positive"
+        );
     }
 }
 

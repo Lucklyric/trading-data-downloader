@@ -108,30 +108,31 @@ async fn test_pagination_klines_first_page() {
     let tracker_clone = tracker.clone();
 
     // Mock fetch function that returns one page of 3 bars
-    let fetch_fn = move |_client: &BinanceHttpClient, _endpoint: &str, params: &[(&str, String)]| {
-        let tracker = tracker_clone.clone();
+    let fetch_fn =
+        move |_client: &BinanceHttpClient, _endpoint: &str, params: &[(&str, String)]| {
+            let tracker = tracker_clone.clone();
 
-        // Extract params we need to verify
-        let has_symbol = params.iter().any(|(k, _)| *k == "symbol");
-        let has_interval = params.iter().any(|(k, _)| *k == "interval");
-        let has_start_time = params.iter().any(|(k, _)| *k == "startTime");
-        let has_end_time = params.iter().any(|(k, _)| *k == "endTime");
-        let has_limit = params.iter().any(|(k, _)| *k == "limit");
+            // Extract params we need to verify
+            let has_symbol = params.iter().any(|(k, _)| *k == "symbol");
+            let has_interval = params.iter().any(|(k, _)| *k == "interval");
+            let has_start_time = params.iter().any(|(k, _)| *k == "startTime");
+            let has_end_time = params.iter().any(|(k, _)| *k == "endTime");
+            let has_limit = params.iter().any(|(k, _)| *k == "limit");
 
-        async move {
-            tracker.increment();
+            async move {
+                tracker.increment();
 
-            // Verify parameters are present
-            assert!(has_symbol, "symbol parameter should be present");
-            assert!(has_interval, "interval parameter should be present");
-            assert!(has_start_time, "startTime parameter should be present");
-            assert!(has_end_time, "endTime parameter should be present");
-            assert!(has_limit, "limit parameter should be present");
+                // Verify parameters are present
+                assert!(has_symbol, "symbol parameter should be present");
+                assert!(has_interval, "interval parameter should be present");
+                assert!(has_start_time, "startTime parameter should be present");
+                assert!(has_end_time, "endTime parameter should be present");
+                assert!(has_limit, "limit parameter should be present");
 
-            // Return 3 bars
-            Ok(create_mock_bars(1699920000000, 3))
-        }
-    };
+                // Return 3 bars
+                Ok(create_mock_bars(1699920000000, 3))
+            }
+        };
 
     // Execute pagination
     let result = PaginationHelper::paginate_klines(
@@ -172,33 +173,34 @@ async fn test_pagination_klines_subsequent_pages() {
     let tracker_clone = tracker.clone();
 
     // Mock fetch function that returns 2 pages: first with 3 bars, second with 2 bars
-    let fetch_fn = move |_client: &BinanceHttpClient, _endpoint: &str, params: &[(&str, String)]| {
-        let tracker = tracker_clone.clone();
+    let fetch_fn =
+        move |_client: &BinanceHttpClient, _endpoint: &str, params: &[(&str, String)]| {
+            let tracker = tracker_clone.clone();
 
-        // Extract startTime from params before entering async block
-        let start_time_param = params
-            .iter()
-            .find(|(k, _)| *k == "startTime")
-            .map(|(_, v)| v.parse::<i64>().unwrap())
-            .unwrap();
+            // Extract startTime from params before entering async block
+            let start_time_param = params
+                .iter()
+                .find(|(k, _)| *k == "startTime")
+                .map(|(_, v)| v.parse::<i64>().unwrap())
+                .unwrap();
 
-        async move {
-            let count = tracker.get_count();
-            tracker.increment();
+            async move {
+                let count = tracker.get_count();
+                tracker.increment();
 
-            // First call: return 3 bars starting from initial time
-            if count == 0 {
-                assert_eq!(start_time_param, 1699920000000);
-                Ok(create_mock_bars(1699920000000, 3))
-            } else {
-                // Second call: should start after last bar's close_time + 1
-                // Last bar from first page has close_time = 1699920000000 + 2*60000 + 59999 = 1699920179999
-                // So next startTime should be 1699920179999 + 1 = 1699920180000
-                assert_eq!(start_time_param, 1699920180000);
-                Ok(create_mock_bars(1699920180000, 2))
+                // First call: return 3 bars starting from initial time
+                if count == 0 {
+                    assert_eq!(start_time_param, 1699920000000);
+                    Ok(create_mock_bars(1699920000000, 3))
+                } else {
+                    // Second call: should start after last bar's close_time + 1
+                    // Last bar from first page has close_time = 1699920000000 + 2*60000 + 59999 = 1699920179999
+                    // So next startTime should be 1699920179999 + 1 = 1699920180000
+                    assert_eq!(start_time_param, 1699920180000);
+                    Ok(create_mock_bars(1699920180000, 2))
+                }
             }
-        }
-    };
+        };
 
     let result = PaginationHelper::paginate_klines(
         &http_client,
@@ -241,24 +243,25 @@ async fn test_pagination_aggtrades_first_page() {
     let tracker_clone = tracker.clone();
 
     // Mock fetch function
-    let fetch_fn = move |_client: &BinanceHttpClient, _endpoint: &str, params: &[(&str, String)]| {
-        let tracker = tracker_clone.clone();
-        let has_from_id = params.iter().any(|(k, _)| *k == "fromId");
+    let fetch_fn =
+        move |_client: &BinanceHttpClient, _endpoint: &str, params: &[(&str, String)]| {
+            let tracker = tracker_clone.clone();
+            let has_from_id = params.iter().any(|(k, _)| *k == "fromId");
 
-        async move {
-            let count = tracker.get_count();
-            tracker.increment();
+            async move {
+                let count = tracker.get_count();
+                tracker.increment();
 
-            if count == 0 {
-                // First page should not have fromId
-                assert!(!has_from_id, "First page should not have fromId parameter");
-                Ok(create_mock_aggtrades(100000, 1699920000000, 5))
-            } else {
-                // Return empty to signal end of data
-                Ok(Vec::new())
+                if count == 0 {
+                    // First page should not have fromId
+                    assert!(!has_from_id, "First page should not have fromId parameter");
+                    Ok(create_mock_aggtrades(100000, 1699920000000, 5))
+                } else {
+                    // Return empty to signal end of data
+                    Ok(Vec::new())
+                }
             }
-        }
-    };
+        };
 
     let result = PaginationHelper::paginate_aggtrades(
         &http_client,
@@ -275,7 +278,11 @@ async fn test_pagination_aggtrades_first_page() {
     let trades = result.unwrap();
     assert_eq!(trades.len(), 5);
     assert_eq!(trades[0].agg_trade_id, 100000);
-    assert_eq!(tracker.get_count(), 2, "Should call fetch twice (once for data, once for empty)");
+    assert_eq!(
+        tracker.get_count(),
+        2,
+        "Should call fetch twice (once for data, once for empty)"
+    );
 }
 
 /// T216: Test pagination with subsequent pages using fromId
@@ -293,31 +300,32 @@ async fn test_pagination_aggtrades_subsequent_pages() {
     let tracker = FetchTracker::new();
     let tracker_clone = tracker.clone();
 
-    let fetch_fn = move |_client: &BinanceHttpClient, _endpoint: &str, params: &[(&str, String)]| {
-        let tracker = tracker_clone.clone();
-        let from_id = params
-            .iter()
-            .find(|(k, _)| *k == "fromId")
-            .map(|(_, v)| v.parse::<i64>().unwrap());
+    let fetch_fn =
+        move |_client: &BinanceHttpClient, _endpoint: &str, params: &[(&str, String)]| {
+            let tracker = tracker_clone.clone();
+            let from_id = params
+                .iter()
+                .find(|(k, _)| *k == "fromId")
+                .map(|(_, v)| v.parse::<i64>().unwrap());
 
-        async move {
-            let count = tracker.get_count();
-            tracker.increment();
+            async move {
+                let count = tracker.get_count();
+                tracker.increment();
 
-            if count == 0 {
-                // First page: no fromId
-                assert!(from_id.is_none());
-                Ok(create_mock_aggtrades(100000, 1699920000000, 3))
-            } else if count == 1 {
-                // Second page: should have fromId = 100003 (last_id + 1)
-                assert_eq!(from_id, Some(100003));
-                Ok(create_mock_aggtrades(100003, 1699920060000, 2))
-            } else {
-                // No more data
-                Ok(Vec::new())
+                if count == 0 {
+                    // First page: no fromId
+                    assert!(from_id.is_none());
+                    Ok(create_mock_aggtrades(100000, 1699920000000, 3))
+                } else if count == 1 {
+                    // Second page: should have fromId = 100003 (last_id + 1)
+                    assert_eq!(from_id, Some(100003));
+                    Ok(create_mock_aggtrades(100003, 1699920060000, 2))
+                } else {
+                    // No more data
+                    Ok(Vec::new())
+                }
             }
-        }
-    };
+        };
 
     let result = PaginationHelper::paginate_aggtrades(
         &http_client,
@@ -333,7 +341,11 @@ async fn test_pagination_aggtrades_subsequent_pages() {
     assert!(result.is_ok());
     let trades = result.unwrap();
     assert_eq!(trades.len(), 5);
-    assert_eq!(tracker.get_count(), 3, "Should call fetch 3 times (2 pages + 1 empty)");
+    assert_eq!(
+        tracker.get_count(),
+        3,
+        "Should call fetch 3 times (2 pages + 1 empty)"
+    );
 
     // Verify IDs are sequential
     for i in 1..trades.len() {
@@ -354,26 +366,27 @@ async fn test_pagination_funding_rates_single_page() {
     let endpoint = "/fapi/v1/fundingRate";
     let symbol = "BTCUSDT";
     let start_time = 1699920000000; // Nov 14, 2023 00:00:00
-    let end_time = 1699977600000;   // Nov 14, 2023 16:00:00 (2 funding periods)
+    let end_time = 1699977600000; // Nov 14, 2023 16:00:00 (2 funding periods)
 
     let tracker = FetchTracker::new();
     let tracker_clone = tracker.clone();
 
-    let fetch_fn = move |_client: &BinanceHttpClient, _endpoint: &str, _params: &[(&str, String)]| {
-        let tracker = tracker_clone.clone();
-        async move {
-            let count = tracker.get_count();
-            tracker.increment();
+    let fetch_fn =
+        move |_client: &BinanceHttpClient, _endpoint: &str, _params: &[(&str, String)]| {
+            let tracker = tracker_clone.clone();
+            async move {
+                let count = tracker.get_count();
+                tracker.increment();
 
-            if count == 0 {
-                // Return 2 funding rates (at 00:00 and 08:00)
-                Ok(create_mock_funding_rates("BTCUSDT", 1699920000000, 2))
-            } else {
-                // No more data
-                Ok(Vec::new())
+                if count == 0 {
+                    // Return 2 funding rates (at 00:00 and 08:00)
+                    Ok(create_mock_funding_rates("BTCUSDT", 1699920000000, 2))
+                } else {
+                    // No more data
+                    Ok(Vec::new())
+                }
             }
-        }
-    };
+        };
 
     let result = PaginationHelper::paginate_funding_rates(
         &http_client,
@@ -388,11 +401,19 @@ async fn test_pagination_funding_rates_single_page() {
     if result.is_err() {
         eprintln!("Funding rates error: {:?}", result.as_ref().unwrap_err());
     }
-    assert!(result.is_ok(), "Result should be ok, got: {:?}", result.as_ref().unwrap_err());
+    assert!(
+        result.is_ok(),
+        "Result should be ok, got: {:?}",
+        result.as_ref().unwrap_err()
+    );
     let rates = result.unwrap();
     assert_eq!(rates.len(), 2);
     assert_eq!(rates[0].symbol, "BTCUSDT");
-    assert_eq!(tracker.get_count(), 2, "Should call fetch twice (once for data, once for empty)");
+    assert_eq!(
+        tracker.get_count(),
+        2,
+        "Should call fetch twice (once for data, once for empty)"
+    );
 }
 
 /// T220: Test pagination stops on empty response
@@ -412,20 +433,21 @@ async fn test_pagination_empty_response_handling() {
     let tracker_clone = tracker.clone();
 
     // First page returns data, second page returns empty
-    let fetch_fn = move |_client: &BinanceHttpClient, _endpoint: &str, _params: &[(&str, String)]| {
-        let tracker = tracker_clone.clone();
-        async move {
-            let count = tracker.get_count();
-            tracker.increment();
+    let fetch_fn =
+        move |_client: &BinanceHttpClient, _endpoint: &str, _params: &[(&str, String)]| {
+            let tracker = tracker_clone.clone();
+            async move {
+                let count = tracker.get_count();
+                tracker.increment();
 
-            if count == 0 {
-                Ok(create_mock_bars(1699920000000, 2))
-            } else {
-                // Return empty on second call
-                Ok(Vec::new())
+                if count == 0 {
+                    Ok(create_mock_bars(1699920000000, 2))
+                } else {
+                    // Return empty on second call
+                    Ok(Vec::new())
+                }
             }
-        }
-    };
+        };
 
     let result = PaginationHelper::paginate_klines(
         &http_client,
@@ -461,16 +483,17 @@ async fn test_pagination_max_iterations_safeguard() {
     let tracker_clone = tracker.clone();
 
     // Always return data to simulate infinite loop
-    let fetch_fn = move |_client: &BinanceHttpClient, _endpoint: &str, _params: &[(&str, String)]| {
-        let tracker = tracker_clone.clone();
-        let count = tracker.get_count();
+    let fetch_fn =
+        move |_client: &BinanceHttpClient, _endpoint: &str, _params: &[(&str, String)]| {
+            let tracker = tracker_clone.clone();
+            let count = tracker.get_count();
 
-        async move {
-            tracker.increment();
-            // Always return one bar to keep pagination going
-            Ok(create_mock_bars(1699920000000 + (count as i64 * 60_000), 1))
-        }
-    };
+            async move {
+                tracker.increment();
+                // Always return one bar to keep pagination going
+                Ok(create_mock_bars(1699920000000 + (count as i64 * 60_000), 1))
+            }
+        };
 
     let result = PaginationHelper::paginate_klines(
         &http_client,

@@ -1,7 +1,7 @@
 //! Integration tests for validation command (T180)
 
 use std::path::PathBuf;
-use trading_data_downloader::cli::{ValidateCommand, validate::ValidateTarget};
+use trading_data_downloader::cli::{validate::ValidateTarget, ValidateCommand};
 
 /// Test identifier validation with valid identifier (T180)
 #[tokio::test]

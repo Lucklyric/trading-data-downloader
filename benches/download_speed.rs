@@ -51,7 +51,10 @@ fn bench_archive_download_one_year_1m() {
         let end_time = end_date.timestamp_millis();
 
         let expected_bars = calculate_expected_bars(start_time, end_time, Interval::OneMinute);
-        println!("Expected bars: {} (365 days of 1-minute data)", expected_bars);
+        println!(
+            "Expected bars: {} (365 days of 1-minute data)",
+            expected_bars
+        );
 
         // Create download job
         let mut job = DownloadJob::new_bars(
@@ -84,7 +87,11 @@ fn bench_archive_download_one_year_1m() {
         println!("Time range: {} to {}", start_date, end_date);
         println!("Expected bars: {}", expected_bars);
         println!("Downloaded bars: {}", bars_downloaded);
-        println!("Time elapsed: {:.2} seconds ({:.2} minutes)", elapsed_secs, elapsed_secs / 60.0);
+        println!(
+            "Time elapsed: {:.2} seconds ({:.2} minutes)",
+            elapsed_secs,
+            elapsed_secs / 60.0
+        );
         println!("Throughput: {:.0} bars/second", throughput);
 
         // Validate SC-001 requirement: <10 minutes
@@ -209,7 +216,10 @@ fn bench_hybrid_download_six_months_1m() {
         let end_time = end_date.timestamp_millis();
 
         let expected_bars = calculate_expected_bars(start_time, end_time, Interval::OneMinute);
-        println!("Expected bars: {} (180 days of 1-minute data)", expected_bars);
+        println!(
+            "Expected bars: {} (180 days of 1-minute data)",
+            expected_bars
+        );
 
         // Create download job
         let mut job = DownloadJob::new_bars(
@@ -242,7 +252,11 @@ fn bench_hybrid_download_six_months_1m() {
         println!("Time range: {} to {}", start_date, end_date);
         println!("Expected bars: {}", expected_bars);
         println!("Downloaded bars: {}", bars_downloaded);
-        println!("Time elapsed: {:.2} seconds ({:.2} minutes)", elapsed_secs, elapsed_secs / 60.0);
+        println!(
+            "Time elapsed: {:.2} seconds ({:.2} minutes)",
+            elapsed_secs,
+            elapsed_secs / 60.0
+        );
         println!("Throughput: {:.0} bars/second", throughput);
 
         // Verify output file exists
@@ -272,7 +286,10 @@ fn bench_single_month_archive_download() {
         let end_time = end_date.timestamp_millis();
 
         let expected_bars = calculate_expected_bars(start_time, end_time, Interval::OneMinute);
-        println!("Expected bars: {} (30 days of 1-minute data)", expected_bars);
+        println!(
+            "Expected bars: {} (30 days of 1-minute data)",
+            expected_bars
+        );
 
         // Create download job
         let mut job = DownloadJob::new_bars(

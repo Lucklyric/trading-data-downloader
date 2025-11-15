@@ -5,8 +5,8 @@
 use super::checkpoint::Checkpoint;
 use fd_lock::RwLock;
 use serde::{Deserialize, Serialize};
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::Path;
 use tracing::{debug, info, warn};
 
@@ -135,34 +135,35 @@ impl ResumeState {
             .write(true)
             .truncate(false)
             .open(&lock_path)
-            .map_err(|e| ResumeError::LockError(format!("Failed to create lock file: {}", e)))?;
+            .map_err(|e| ResumeError::LockError(format!("Failed to create lock file: {e}")))?;
 
         // Acquire exclusive lock for writing
         debug!("Acquiring write lock for resume state");
         let mut lock = RwLock::new(lock_file);
-        let _guard = lock.write()
-            .map_err(|e| ResumeError::LockError(format!("Failed to acquire write lock: {}", e)))?;
+        let _guard = lock
+            .write()
+            .map_err(|e| ResumeError::LockError(format!("Failed to acquire write lock: {e}")))?;
 
         // Use NamedTempFile for atomic write
         // tempfile::NamedTempFile automatically handles creation in same directory
         let parent_dir = path.parent().unwrap_or_else(|| Path::new("."));
         let mut temp_file = tempfile::NamedTempFile::new_in(parent_dir)
-            .map_err(|e| ResumeError::IoError(format!("Failed to create temp file: {}", e)))?;
+            .map_err(|e| ResumeError::IoError(format!("Failed to create temp file: {e}")))?;
 
         // Write JSON to temp file
         temp_file
             .write_all(json.as_bytes())
-            .map_err(|e| ResumeError::IoError(format!("Failed to write to temp file: {}", e)))?;
+            .map_err(|e| ResumeError::IoError(format!("Failed to write to temp file: {e}")))?;
 
         // Sync to ensure data is on disk before rename
         temp_file
             .flush()
-            .map_err(|e| ResumeError::IoError(format!("Failed to flush temp file: {}", e)))?;
+            .map_err(|e| ResumeError::IoError(format!("Failed to flush temp file: {e}")))?;
 
         // Atomically replace the target file (persists temp file to target path)
         temp_file
             .persist(path)
-            .map_err(|e| ResumeError::IoError(format!("Failed to persist temp file: {}", e)))?;
+            .map_err(|e| ResumeError::IoError(format!("Failed to persist temp file: {e}")))?;
 
         info!(
             path = %path.display(),
@@ -191,23 +192,23 @@ impl ResumeState {
             .write(true)
             .truncate(false)
             .open(&lock_path)
-            .map_err(|e| ResumeError::LockError(format!("Failed to create lock file: {}", e)))?;
+            .map_err(|e| ResumeError::LockError(format!("Failed to create lock file: {e}")))?;
 
         // Acquire shared lock for reading
         debug!("Acquiring read lock for resume state");
-        let mut lock = RwLock::new(lock_file);
-        let _guard = lock.read()
-            .map_err(|e| ResumeError::LockError(format!("Failed to acquire read lock: {}", e)))?;
+        let lock = RwLock::new(lock_file);
+        let _guard = lock
+            .read()
+            .map_err(|e| ResumeError::LockError(format!("Failed to acquire read lock: {e}")))?;
 
         // Read the state file while holding the lock
         let contents =
             std::fs::read_to_string(path).map_err(|e| ResumeError::IoError(e.to_string()))?;
 
-        let state: ResumeState = serde_json::from_str(&contents)
-            .map_err(|e| {
-                warn!(error = %e, "Failed to deserialize resume state");
-                ResumeError::DeserializationError(e.to_string())
-            })?;
+        let state: ResumeState = serde_json::from_str(&contents).map_err(|e| {
+            warn!(error = %e, "Failed to deserialize resume state");
+            ResumeError::DeserializationError(e.to_string())
+        })?;
 
         // Validate schema version
         match state.validate_schema_version() {
@@ -236,8 +237,7 @@ impl ResumeState {
 }
 
 /// Metadata about resume state
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StateMetadata {
     total_checkpoints: u64,
     total_records: u64,
@@ -249,7 +249,6 @@ pub struct StateMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     lock_pid: Option<u32>,
 }
-
 
 impl StateMetadata {
     /// Get total checkpoints

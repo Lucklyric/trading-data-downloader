@@ -3,3 +3,5 @@ pub mod binance_http;
 pub mod binance_parser;
 pub mod fetcher_factory;
 pub mod pagination;
+pub mod progress;
+pub mod retry_formatter;

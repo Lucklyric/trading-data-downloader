@@ -98,11 +98,7 @@ fn test_tracing_spans() {
         .try_init();
 
     // Test that spans can be created and entered
-    let span = tracing::info_span!(
-        "download_operation",
-        operation = "bars",
-        symbol = "BTCUSDT"
-    );
+    let span = tracing::info_span!("download_operation", operation = "bars", symbol = "BTCUSDT");
 
     let _enter = span.enter();
     info!("Inside span");
@@ -114,7 +110,8 @@ fn test_tracing_spans() {
 #[test]
 fn test_log_filtering() {
     // Test that we can create filters that only show certain modules
-    let _filter = EnvFilter::new("trading_data_downloader::fetcher=debug,trading_data_downloader=info");
+    let _filter =
+        EnvFilter::new("trading_data_downloader::fetcher=debug,trading_data_downloader=info");
     // Filter creation succeeds, which is what we care about
     assert!(true);
 }

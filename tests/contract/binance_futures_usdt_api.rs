@@ -15,11 +15,7 @@ async fn test_binance_klines_api_contract() {
 
     // Use BTCUSDT as a stable symbol for testing
     let url = "https://fapi.binance.com/fapi/v1/klines";
-    let params = [
-        ("symbol", "BTCUSDT"),
-        ("interval", "1m"),
-        ("limit", "2"),
-    ];
+    let params = [("symbol", "BTCUSDT"), ("interval", "1m"), ("limit", "2")];
 
     let response = client
         .get(url)
@@ -43,7 +39,10 @@ async fn test_binance_klines_api_contract() {
     assert!(body.is_array(), "Response should be an array");
 
     let klines = body.as_array().expect("Expected array");
-    assert!(!klines.is_empty(), "Response should contain at least one kline");
+    assert!(
+        !klines.is_empty(),
+        "Response should contain at least one kline"
+    );
 
     // Verify first kline has expected structure
     let first_kline = &klines[0];
@@ -65,11 +64,7 @@ async fn test_binance_klines_response_schema() {
     let client = reqwest::Client::new();
 
     let url = "https://fapi.binance.com/fapi/v1/klines";
-    let params = [
-        ("symbol", "BTCUSDT"),
-        ("interval", "1m"),
-        ("limit", "1"),
-    ];
+    let params = [("symbol", "BTCUSDT"), ("interval", "1m"), ("limit", "1")];
 
     let response = client
         .get(url)
@@ -144,7 +139,10 @@ async fn test_binance_klines_response_schema() {
         kline[6]
     );
     let close_time = kline[6].as_i64().expect("Close time should be i64");
-    assert!(close_time > open_time, "Close time should be after open time");
+    assert!(
+        close_time > open_time,
+        "Close time should be after open time"
+    );
 
     // Index 7: Quote asset volume (string)
     assert!(
@@ -257,10 +255,7 @@ async fn test_binance_exchangeinfo_response_schema() {
     // Validate timezone
     let timezone = body.get("timezone").expect("timezone should exist");
     assert!(timezone.is_string(), "timezone should be a string");
-    assert_eq!(
-        timezone.as_str().expect("timezone should be string"),
-        "UTC"
-    );
+    assert_eq!(timezone.as_str().expect("timezone should be string"), "UTC");
 
     // Validate serverTime
     let server_time = body.get("serverTime").expect("serverTime should exist");
@@ -321,14 +316,19 @@ async fn test_binance_exchangeinfo_response_schema() {
     let contract_type = first_symbol
         .get("contractType")
         .expect("contractType should exist");
+    assert!(contract_type.is_string(), "contractType should be a string");
+    let contract_type_str = contract_type
+        .as_str()
+        .expect("contractType should be string");
     assert!(
-        contract_type.is_string(),
-        "contractType should be a string"
-    );
-    let contract_type_str = contract_type.as_str().expect("contractType should be string");
-    assert!(
-        ["PERPETUAL", "CURRENT_QUARTER", "NEXT_QUARTER", "CURRENT_QUARTER_DELIVERING", "NEXT_QUARTER_DELIVERING"]
-            .contains(&contract_type_str),
+        [
+            "PERPETUAL",
+            "CURRENT_QUARTER",
+            "NEXT_QUARTER",
+            "CURRENT_QUARTER_DELIVERING",
+            "NEXT_QUARTER_DELIVERING"
+        ]
+        .contains(&contract_type_str),
         "contractType should be one of valid values, got: {}",
         contract_type_str
     );
@@ -531,11 +531,7 @@ async fn test_aggtrades_one_hour_window_constraint() {
         ("endTime", &end_time.to_string()),
     ];
 
-    let response = client
-        .get(url)
-        .query(&params)
-        .send()
-        .await;
+    let response = client.get(url).query(&params).send().await;
 
     // According to docs, requests > 1 hour window may timeout or return error
     // We're just documenting this constraint exists, not necessarily that it fails
@@ -580,10 +576,7 @@ async fn test_binance_funding_rate_api_contract() {
     let client = reqwest::Client::new();
 
     let url = "https://fapi.binance.com/fapi/v1/fundingRate";
-    let params = [
-        ("symbol", "BTCUSDT"),
-        ("limit", "2"),
-    ];
+    let params = [("symbol", "BTCUSDT"), ("limit", "2")];
 
     let response = client
         .get(url)
@@ -607,11 +600,17 @@ async fn test_binance_funding_rate_api_contract() {
     assert!(body.is_array(), "Response should be an array");
 
     let funding_rates = body.as_array().expect("Expected array");
-    assert!(!funding_rates.is_empty(), "Response should contain at least one funding rate");
+    assert!(
+        !funding_rates.is_empty(),
+        "Response should contain at least one funding rate"
+    );
 
     // Verify first funding rate has expected structure
     let first_rate = &funding_rates[0];
-    assert!(first_rate.is_object(), "Each funding rate should be an object");
+    assert!(
+        first_rate.is_object(),
+        "Each funding rate should be an object"
+    );
 }
 
 /// T131: Contract test for funding rate response schema validation
@@ -621,10 +620,7 @@ async fn test_binance_funding_rate_response_schema() {
     let client = reqwest::Client::new();
 
     let url = "https://fapi.binance.com/fapi/v1/fundingRate";
-    let params = [
-        ("symbol", "BTCUSDT"),
-        ("limit", "1"),
-    ];
+    let params = [("symbol", "BTCUSDT"), ("limit", "1")];
 
     let response = client
         .get(url)
@@ -675,9 +671,8 @@ async fn test_binance_funding_rate_response_schema() {
     assert!(funding_time_value > 0, "fundingTime should be positive");
 
     // Validate funding time alignment (should be at 00:00, 08:00, or 16:00 UTC)
-    use chrono::{DateTime, Utc, Timelike};
-    let dt = DateTime::<Utc>::from_timestamp_millis(funding_time_value)
-        .expect("Valid timestamp");
+    use chrono::{DateTime, Timelike, Utc};
+    let dt = DateTime::<Utc>::from_timestamp_millis(funding_time_value).expect("Valid timestamp");
     let hour = dt.hour();
     assert!(
         hour % 8 == 0,
@@ -685,11 +680,9 @@ async fn test_binance_funding_rate_response_schema() {
         hour
     );
     assert_eq!(
-        dt.minute(), 0,
+        dt.minute(),
+        0,
         "Funding time should be at exact hour boundary"
     );
-    assert_eq!(
-        dt.second(), 0,
-        "Funding time should have zero seconds"
-    );
+    assert_eq!(dt.second(), 0, "Funding time should have zero seconds");
 }

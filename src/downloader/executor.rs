@@ -5,13 +5,16 @@ use crate::downloader::config::{
     calculate_backoff, CHECKPOINT_INTERVAL_BARS, CHECKPOINT_INTERVAL_FUNDING,
     CHECKPOINT_INTERVAL_TRADES, MAX_RETRIES,
 };
+use crate::downloader::progress::{DownloadItemType, ProgressState, ProgressTracker};
 use crate::downloader::{DownloadError, DownloadJob, JobProgress, JobStatus};
 use crate::fetcher::{create_fetcher, DataFetcher};
 use crate::identifier::ExchangeIdentifier;
-use crate::output::csv::{CsvAggTradesWriter, CsvBarsWriter, CsvFundingWriter, read_time_range};
+use crate::metrics::DownloadMetrics;
+use crate::output::csv::{read_time_range, CsvAggTradesWriter, CsvBarsWriter, CsvFundingWriter};
 use crate::output::{AggTradesWriter, BarsWriter, FundingWriter, OutputWriter};
 use crate::resume::checkpoint::{Checkpoint, CheckpointType};
 use crate::resume::state::ResumeState;
+use crate::shutdown::{self, SharedShutdown};
 use crate::{AggTrade, Bar, FundingRate};
 use futures_util::StreamExt;
 use std::path::PathBuf;
@@ -92,6 +95,8 @@ pub struct DownloadExecutor {
     resume_dir: Option<PathBuf>,
     max_retries: u32,
     force: bool,
+    progress_tracker: ProgressTracker,
+    shutdown: Option<SharedShutdown>,
 }
 
 impl DownloadExecutor {
@@ -101,6 +106,8 @@ impl DownloadExecutor {
             resume_dir: None,
             max_retries: MAX_RETRIES,
             force: false,
+            progress_tracker: ProgressTracker::default(),
+            shutdown: shutdown::get_global_shutdown(),
         }
     }
 
@@ -113,6 +120,8 @@ impl DownloadExecutor {
             resume_dir: Some(resume_dir),
             max_retries: MAX_RETRIES,
             force: false,
+            progress_tracker: ProgressTracker::default(),
+            shutdown: shutdown::get_global_shutdown(),
         }
     }
 
@@ -128,12 +137,24 @@ impl DownloadExecutor {
         self
     }
 
+    /// Attach a shared shutdown handle for graceful cancellation.
+    pub fn with_shutdown(mut self, shutdown: SharedShutdown) -> Self {
+        self.shutdown = Some(shutdown);
+        self
+    }
+
+    /// Override progress tracking configuration.
+    pub fn with_progress_tracker(mut self, tracker: ProgressTracker) -> Self {
+        self.progress_tracker = tracker;
+        self
+    }
+
     /// Generate resume state file path for a job
     fn get_resume_state_path(&self, job: &DownloadJob) -> Option<PathBuf> {
         self.resume_dir.as_ref().map(|dir| {
             let data_type_str = match job.job_type {
                 crate::downloader::JobType::Bars { interval } => {
-                    format!("bars_{}", interval)
+                    format!("bars_{interval}")
                 }
                 crate::downloader::JobType::AggTrades => "aggtrades".to_string(),
                 crate::downloader::JobType::FundingRates => "funding".to_string(),
@@ -198,17 +219,14 @@ impl DownloadExecutor {
     ) -> Result<(), DownloadError> {
         if let Some(path) = self.get_resume_state_path(job) {
             let mut state = if path.exists() {
-                ResumeState::load(&path).map_err(|e| {
-                    DownloadError::IoError(format!("Failed to load state: {}", e))
-                })?
+                ResumeState::load(&path)
+                    .map_err(|e| DownloadError::IoError(format!("Failed to load state: {e}")))?
             } else {
                 ResumeState::new(
                     job.identifier.clone(),
                     job.symbol.clone(),
                     match job.job_type {
-                        crate::downloader::JobType::Bars { interval } => {
-                            Some(interval.to_string())
-                        }
+                        crate::downloader::JobType::Bars { interval } => Some(interval.to_string()),
                         _ => None,
                     },
                     match job.job_type {
@@ -227,9 +245,9 @@ impl DownloadExecutor {
 
             state.add_checkpoint(checkpoint);
 
-            state.save(&path).map_err(|e| {
-                DownloadError::IoError(format!("Failed to save checkpoint: {}", e))
-            })?;
+            state
+                .save(&path)
+                .map_err(|e| DownloadError::IoError(format!("Failed to save checkpoint: {e}")))?;
 
             debug!(
                 total_checkpoints = state.checkpoints().len(),
@@ -261,7 +279,7 @@ impl DownloadExecutor {
             .map_err(|e| DownloadError::ValidationError(e.to_string()))?;
 
         create_fetcher(&identifier)
-            .map_err(|e| DownloadError::FetcherError(format!("Failed to create fetcher: {}", e)))
+            .map_err(|e| DownloadError::FetcherError(format!("Failed to create fetcher: {e}")))
     }
 
     /// Retry with exponential backoff (T168)
@@ -284,9 +302,48 @@ impl DownloadExecutor {
             backoff_ms = backoff.as_millis(),
             "Retrying after backoff delay"
         );
-        tokio::time::sleep(backoff).await;
+        if self.shutdown_requested() {
+            return false;
+        }
+        if let Some(shutdown) = &self.shutdown {
+            tokio::select! {
+                _ = tokio::time::sleep(backoff) => {},
+                _ = shutdown.wait_for_shutdown() => return false,
+            }
+        } else {
+            tokio::time::sleep(backoff).await;
+        }
 
         true
+    }
+
+    fn shutdown_requested(&self) -> bool {
+        self.shutdown
+            .as_ref()
+            .map(|s| s.is_shutdown_requested())
+            .unwrap_or(false)
+    }
+
+    async fn abort_due_to_shutdown(
+        &self,
+        job: &mut DownloadJob,
+    ) -> Result<JobProgress, DownloadError> {
+        job.status = JobStatus::Cancelled;
+        job.progress.error = Some("Shutdown requested".to_string());
+        info!("Shutdown requested - saving progress before exiting");
+        self.save_shutdown_checkpoint(job).await?;
+        Err(DownloadError::NetworkError(
+            "Shutdown requested".to_string(),
+        ))
+    }
+
+    async fn save_shutdown_checkpoint(&self, job: &mut DownloadJob) -> Result<(), DownloadError> {
+        if let Some(timestamp) = job.progress.current_position {
+            let checkpoint =
+                Checkpoint::time_window(job.start_time, timestamp, job.progress.downloaded_bars, 0);
+            self.save_checkpoint(job, checkpoint).await?;
+        }
+        Ok(())
     }
 
     /// Execute bars download job (T076, T168)
@@ -306,9 +363,11 @@ impl DownloadExecutor {
 
         info!("Starting bars download job");
 
+        // Start metrics tracking for this download
+        let download_metrics = DownloadMetrics::start("bars", &job.symbol);
+
         // Validate job
-        job.validate()
-            .map_err(|e| DownloadError::ValidationError(e))?;
+        job.validate().map_err(DownloadError::ValidationError)?;
 
         // Extract interval from job type
         let interval = match job.job_type {
@@ -338,7 +397,10 @@ impl DownloadExecutor {
                     return Ok(job.progress.clone());
                 }
                 if adjusted > start_time {
-                    info!(start_time = adjusted, "Adjusting bars start_time to existing coverage end + 1");
+                    info!(
+                        start_time = adjusted,
+                        "Adjusting bars start_time to existing coverage end + 1"
+                    );
                     start_time = adjusted;
                     job.progress.current_position = Some(start_time);
                 }
@@ -351,10 +413,7 @@ impl DownloadExecutor {
         let total_bars = ((total_duration + interval_ms - 1) / interval_ms) as u64;
         job.progress.total_bars = Some(total_bars);
 
-        info!(
-            total_bars = total_bars,
-            "Expected bars for time range"
-        );
+        info!(total_bars = total_bars, "Expected bars for time range");
 
         job.status = JobStatus::InProgress;
 
@@ -364,6 +423,22 @@ impl DownloadExecutor {
             .map_err(|e| DownloadError::OutputError(e.to_string()))?;
         let mut writer = WriterType::Bars(writer);
 
+        let total_estimated = job.progress.total_bars.or_else(|| {
+            ProgressState::estimate_total_from_range(
+                DownloadItemType::Bars,
+                job.start_time,
+                job.end_time,
+                Some(interval_ms),
+            )
+        });
+        let mut progress_state = self.progress_tracker.create_state(
+            total_estimated,
+            DownloadItemType::Bars,
+            Some((job.start_time, job.end_time)),
+        );
+        progress_state.items_downloaded = job.progress.downloaded_bars;
+        progress_state.last_position = job.progress.current_position;
+
         // Download with retry
         let result = self
             .download_bars_with_retry(
@@ -372,6 +447,7 @@ impl DownloadExecutor {
                 &mut writer,
                 &mut start_time,
                 interval,
+                &mut progress_state,
             )
             .await;
 
@@ -380,6 +456,15 @@ impl DownloadExecutor {
 
         if job.status == JobStatus::Completed {
             self.cleanup_resume_state(&job);
+            // Record successful download in metrics
+            download_metrics.record_success(job.progress.downloaded_bars);
+        } else {
+            // Record failure in metrics
+            let error_msg = match &result {
+                Err(e) => e.to_string(),
+                Ok(_) => "Unknown error".to_string(),
+            };
+            download_metrics.record_failure(&error_msg);
         }
 
         info!(
@@ -408,9 +493,11 @@ impl DownloadExecutor {
 
         info!("Starting aggTrades download job");
 
+        // Start metrics tracking for this download
+        let download_metrics = DownloadMetrics::start("aggtrades", &job.symbol);
+
         // Validate job
-        job.validate()
-            .map_err(|e| DownloadError::ValidationError(e))?;
+        job.validate().map_err(DownloadError::ValidationError)?;
 
         // Load resume state
         let resume_time = self.load_resume_state(&job)?;
@@ -430,7 +517,10 @@ impl DownloadExecutor {
                     return Ok(job.progress.clone());
                 }
                 if adjusted > start_time {
-                    info!(start_time = adjusted, "Adjusting aggTrades start_time to coverage end + 1");
+                    info!(
+                        start_time = adjusted,
+                        "Adjusting aggTrades start_time to coverage end + 1"
+                    );
                     start_time = adjusted;
                     job.progress.current_position = Some(start_time);
                 }
@@ -446,6 +536,18 @@ impl DownloadExecutor {
         let writer = CsvAggTradesWriter::new(&job.output_path)
             .map_err(|e| DownloadError::OutputError(e.to_string()))?;
         let mut writer = WriterType::AggTrades(writer);
+        let mut progress_state = self.progress_tracker.create_state(
+            ProgressState::estimate_total_from_range(
+                DownloadItemType::AggTrades,
+                job.start_time,
+                job.end_time,
+                None,
+            ),
+            DownloadItemType::AggTrades,
+            Some((job.start_time, job.end_time)),
+        );
+        progress_state.items_downloaded = job.progress.downloaded_bars;
+        progress_state.last_position = job.progress.current_position;
 
         // Download with retry
         let result = self
@@ -454,6 +556,7 @@ impl DownloadExecutor {
                 &*fetcher,
                 &mut writer,
                 &mut start_time,
+                &mut progress_state,
             )
             .await;
 
@@ -462,6 +565,15 @@ impl DownloadExecutor {
 
         if job.status == JobStatus::Completed {
             self.cleanup_resume_state(&job);
+            // Record successful download in metrics
+            download_metrics.record_success(job.progress.downloaded_bars);
+        } else {
+            // Record failure in metrics
+            let error_msg = match &result {
+                Err(e) => e.to_string(),
+                Ok(_) => "Unknown error".to_string(),
+            };
+            download_metrics.record_failure(&error_msg);
         }
 
         info!(
@@ -490,9 +602,11 @@ impl DownloadExecutor {
 
         info!("Starting funding rates download job");
 
+        // Start metrics tracking for this download
+        let download_metrics = DownloadMetrics::start("funding", &job.symbol);
+
         // Validate job
-        job.validate()
-            .map_err(|e| DownloadError::ValidationError(e))?;
+        job.validate().map_err(DownloadError::ValidationError)?;
 
         // Load resume state
         let resume_time = self.load_resume_state(&job)?;
@@ -512,7 +626,10 @@ impl DownloadExecutor {
                     return Ok(job.progress.clone());
                 }
                 if adjusted > start_time {
-                    info!(start_time = adjusted, "Adjusting funding start_time to coverage end + 1");
+                    info!(
+                        start_time = adjusted,
+                        "Adjusting funding start_time to coverage end + 1"
+                    );
                     start_time = adjusted;
                     job.progress.current_position = Some(start_time);
                 }
@@ -528,6 +645,18 @@ impl DownloadExecutor {
         let writer = CsvFundingWriter::new(&job.output_path)
             .map_err(|e| DownloadError::OutputError(e.to_string()))?;
         let mut writer = WriterType::Funding(writer);
+        let mut progress_state = self.progress_tracker.create_state(
+            ProgressState::estimate_total_from_range(
+                DownloadItemType::FundingRates,
+                job.start_time,
+                job.end_time,
+                None,
+            ),
+            DownloadItemType::FundingRates,
+            Some((job.start_time, job.end_time)),
+        );
+        progress_state.items_downloaded = job.progress.downloaded_bars;
+        progress_state.last_position = job.progress.current_position;
 
         // Download with retry
         let result = self
@@ -536,6 +665,7 @@ impl DownloadExecutor {
                 &*fetcher,
                 &mut writer,
                 &mut start_time,
+                &mut progress_state,
             )
             .await;
 
@@ -544,6 +674,15 @@ impl DownloadExecutor {
 
         if job.status == JobStatus::Completed {
             self.cleanup_resume_state(&job);
+            // Record successful download in metrics
+            download_metrics.record_success(job.progress.downloaded_bars);
+        } else {
+            // Record failure in metrics
+            let error_msg = match &result {
+                Err(e) => e.to_string(),
+                Ok(_) => "Unknown error".to_string(),
+            };
+            download_metrics.record_failure(&error_msg);
         }
 
         info!(
@@ -563,12 +702,19 @@ impl DownloadExecutor {
         writer: &mut WriterType,
         start_time: &mut i64,
         interval: crate::Interval,
+        progress_state: &mut ProgressState,
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
         let mut last_error = None;
 
         loop {
-            match fetcher.fetch_bars_stream(&job.symbol, interval, *start_time, job.end_time).await {
+            if self.shutdown_requested() {
+                return self.abort_due_to_shutdown(job).await;
+            }
+            match fetcher
+                .fetch_bars_stream(&job.symbol, interval, *start_time, job.end_time)
+                .await
+            {
                 Ok(mut stream) => {
                     // Process stream
                     while let Some(result) = stream.next().await {
@@ -581,6 +727,20 @@ impl DownloadExecutor {
 
                                 let timestamp = bar.close_time;
                                 job.progress.current_position = Some(timestamp);
+
+                                progress_state.update(1, Some(timestamp));
+                                if progress_state.should_emit_update() {
+                                    info!(
+                                        symbol = %job.symbol,
+                                        "{}",
+                                        progress_state.format_progress()
+                                    );
+                                    progress_state.mark_emitted();
+                                }
+
+                                if self.shutdown_requested() {
+                                    return self.abort_due_to_shutdown(job).await;
+                                }
 
                                 // Save checkpoint at intervals
                                 if job.progress.downloaded_bars % CHECKPOINT_INTERVAL_BARS == 0 {
@@ -621,6 +781,9 @@ impl DownloadExecutor {
             // Retry logic
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
+                if self.shutdown_requested() {
+                    return self.abort_due_to_shutdown(job).await;
+                }
                 job.status = JobStatus::Failed;
                 let error_msg = last_error
                     .map(|e| e.to_string())
@@ -648,12 +811,19 @@ impl DownloadExecutor {
         fetcher: &dyn DataFetcher,
         writer: &mut WriterType,
         start_time: &mut i64,
+        progress_state: &mut ProgressState,
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
         let mut last_error = None;
 
         loop {
-            match fetcher.fetch_aggtrades_stream(&job.symbol, *start_time, job.end_time).await {
+            if self.shutdown_requested() {
+                return self.abort_due_to_shutdown(job).await;
+            }
+            match fetcher
+                .fetch_aggtrades_stream(&job.symbol, *start_time, job.end_time)
+                .await
+            {
                 Ok(mut stream) => {
                     // Process stream
                     while let Some(result) = stream.next().await {
@@ -666,6 +836,20 @@ impl DownloadExecutor {
 
                                 let timestamp = trade.timestamp;
                                 job.progress.current_position = Some(timestamp);
+
+                                progress_state.update(1, Some(timestamp));
+                                if progress_state.should_emit_update() {
+                                    info!(
+                                        symbol = %job.symbol,
+                                        "{}",
+                                        progress_state.format_progress()
+                                    );
+                                    progress_state.mark_emitted();
+                                }
+
+                                if self.shutdown_requested() {
+                                    return self.abort_due_to_shutdown(job).await;
+                                }
 
                                 // Save checkpoint at intervals
                                 if job.progress.downloaded_bars % CHECKPOINT_INTERVAL_TRADES == 0 {
@@ -701,6 +885,9 @@ impl DownloadExecutor {
             // Retry logic
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
+                if self.shutdown_requested() {
+                    return self.abort_due_to_shutdown(job).await;
+                }
                 job.status = JobStatus::Failed;
                 let error_msg = last_error
                     .map(|e| e.to_string())
@@ -728,12 +915,19 @@ impl DownloadExecutor {
         fetcher: &dyn DataFetcher,
         writer: &mut WriterType,
         start_time: &mut i64,
+        progress_state: &mut ProgressState,
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
         let mut last_error = None;
 
         loop {
-            match fetcher.fetch_funding_stream(&job.symbol, *start_time, job.end_time).await {
+            if self.shutdown_requested() {
+                return self.abort_due_to_shutdown(job).await;
+            }
+            match fetcher
+                .fetch_funding_stream(&job.symbol, *start_time, job.end_time)
+                .await
+            {
                 Ok(mut stream) => {
                     // Process stream
                     while let Some(result) = stream.next().await {
@@ -746,6 +940,20 @@ impl DownloadExecutor {
 
                                 let timestamp = rate.funding_time;
                                 job.progress.current_position = Some(timestamp);
+
+                                progress_state.update(1, Some(timestamp));
+                                if progress_state.should_emit_update() {
+                                    info!(
+                                        symbol = %job.symbol,
+                                        "{}",
+                                        progress_state.format_progress()
+                                    );
+                                    progress_state.mark_emitted();
+                                }
+
+                                if self.shutdown_requested() {
+                                    return self.abort_due_to_shutdown(job).await;
+                                }
 
                                 // Save checkpoint at intervals
                                 if job.progress.downloaded_bars % CHECKPOINT_INTERVAL_FUNDING == 0 {
@@ -781,6 +989,9 @@ impl DownloadExecutor {
             // Retry logic
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
+                if self.shutdown_requested() {
+                    return self.abort_due_to_shutdown(job).await;
+                }
                 job.status = JobStatus::Failed;
                 let error_msg = last_error
                     .map(|e| e.to_string())

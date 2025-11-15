@@ -21,9 +21,7 @@ use crate::downloader::rate_limit::RateLimiter;
 /// The reqwest::Client is designed to be cloned cheaply (uses Arc internally),
 /// but we explicitly use a global instance to ensure connection pooling works
 /// optimally across all download operations.
-pub static GLOBAL_HTTP_CLIENT: Lazy<Arc<Client>> = Lazy::new(|| {
-    Arc::new(Client::new())
-});
+pub static GLOBAL_HTTP_CLIENT: Lazy<Arc<Client>> = Lazy::new(|| Arc::new(Client::new()));
 
 /// Global rate limiter for Binance Futures endpoints (both USDT and COIN)
 ///
@@ -32,12 +30,8 @@ pub static GLOBAL_HTTP_CLIENT: Lazy<Arc<Client>> = Lazy::new(|| {
 /// - 2400 weight per 1 minute
 ///
 /// All fetcher instances MUST share this limiter to avoid exceeding quotas.
-pub static GLOBAL_BINANCE_RATE_LIMITER: Lazy<Arc<RateLimiter>> = Lazy::new(|| {
-    Arc::new(RateLimiter::weight_based(
-        2400,
-        Duration::from_secs(60),
-    ))
-});
+pub static GLOBAL_BINANCE_RATE_LIMITER: Lazy<Arc<RateLimiter>> =
+    Lazy::new(|| Arc::new(RateLimiter::weight_based(2400, Duration::from_secs(60))));
 
 /// Get the global HTTP client
 ///

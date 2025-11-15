@@ -1,9 +1,12 @@
 //! Main entry point for trading-data-downloader CLI (T088, T167)
 
 use clap::Parser;
-use trading_data_downloader::cli::{Cli, Commands};
+use std::net::SocketAddr;
 use tracing::error;
 use tracing_subscriber::EnvFilter;
+use trading_data_downloader::cli::{Cli, Commands};
+use trading_data_downloader::metrics;
+use trading_data_downloader::shutdown::{self, ShutdownCoordinator};
 
 /// Initialize tracing subscriber with optional JSON formatting (T167)
 fn init_tracing() {
@@ -21,9 +24,7 @@ fn init_tracing() {
             .with_env_filter(filter)
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(filter).init();
     }
 }
 
@@ -32,24 +33,59 @@ async fn main() {
     // Initialize tracing with enhanced configuration
     init_tracing();
 
+    // Install global shutdown coordinator and Ctrl+C handler
+    let shutdown = ShutdownCoordinator::shared();
+    shutdown::set_global_shutdown(shutdown.clone());
+    tokio::spawn({
+        let shutdown = shutdown.clone();
+        async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                tracing::warn!("Ctrl+C received - saving progress...");
+                shutdown.request_shutdown();
+            }
+        }
+    });
+
+    // Initialize metrics system (optional, graceful failure)
+    let metrics_addr = std::env::var("METRICS_ADDR").unwrap_or_else(|_| "0.0.0.0:9090".to_string());
+
+    if let Ok(addr) = metrics_addr.parse::<SocketAddr>() {
+        if let Err(e) = metrics::init_metrics(addr).await {
+            tracing::warn!(
+                "Failed to initialize metrics: {}. Continuing without metrics.",
+                e
+            );
+        } else {
+            tracing::info!("Metrics server listening on {}", addr);
+        }
+    } else {
+        tracing::debug!(
+            "Invalid metrics address: {}. Metrics disabled.",
+            metrics_addr
+        );
+    }
+
     // Parse CLI arguments
     let cli = Cli::parse();
 
     // Execute command
     let result = match cli.command {
-        Commands::Download(ref args) => {
-            match &args.data_type {
-                trading_data_downloader::cli::download::DataType::Bars(bars_args) => {
-                    bars_args.execute(&cli).await.map_err(|e| anyhow::anyhow!(e))
-                }
-                trading_data_downloader::cli::download::DataType::AggTrades(aggtrades_args) => {
-                    aggtrades_args.execute(&cli).await.map_err(|e| anyhow::anyhow!(e))
-                }
-                trading_data_downloader::cli::download::DataType::Funding(funding_args) => {
-                    funding_args.execute(&cli).await.map_err(|e| anyhow::anyhow!(e))
-                }
+        Commands::Download(ref args) => match &args.data_type {
+            trading_data_downloader::cli::download::DataType::Bars(bars_args) => bars_args
+                .execute(&cli, shutdown.clone())
+                .await
+                .map_err(|e| anyhow::anyhow!(e)),
+            trading_data_downloader::cli::download::DataType::AggTrades(aggtrades_args) => {
+                aggtrades_args
+                    .execute(&cli, shutdown.clone())
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
             }
-        }
+            trading_data_downloader::cli::download::DataType::Funding(funding_args) => funding_args
+                .execute(&cli, shutdown.clone())
+                .await
+                .map_err(|e| anyhow::anyhow!(e)),
+        },
         Commands::Sources(ref sources_cmd) => {
             sources_cmd.execute().await.map_err(|e| anyhow::anyhow!(e))
         }

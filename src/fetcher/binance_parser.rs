@@ -98,46 +98,45 @@ impl BinanceParser {
 
         for trade in trades {
             // Field 'a': Aggregate trade ID
-            let agg_trade_id = trade
-                .get("a")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| FetcherError::ParseError("Invalid or missing agg_trade_id (a)".to_string()))?;
+            let agg_trade_id = trade.get("a").and_then(|v| v.as_i64()).ok_or_else(|| {
+                FetcherError::ParseError("Invalid or missing agg_trade_id (a)".to_string())
+            })?;
 
             // Field 'p': Price (string)
             let price = Self::parse_decimal(
-                trade.get("p").ok_or_else(|| FetcherError::ParseError("Missing price (p)".to_string()))?,
-                "price"
+                trade
+                    .get("p")
+                    .ok_or_else(|| FetcherError::ParseError("Missing price (p)".to_string()))?,
+                "price",
             )?;
 
             // Field 'q': Quantity (string)
             let quantity = Self::parse_decimal(
-                trade.get("q").ok_or_else(|| FetcherError::ParseError("Missing quantity (q)".to_string()))?,
-                "quantity"
+                trade
+                    .get("q")
+                    .ok_or_else(|| FetcherError::ParseError("Missing quantity (q)".to_string()))?,
+                "quantity",
             )?;
 
             // Field 'f': First trade ID
-            let first_trade_id = trade
-                .get("f")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| FetcherError::ParseError("Invalid or missing first_trade_id (f)".to_string()))?;
+            let first_trade_id = trade.get("f").and_then(|v| v.as_i64()).ok_or_else(|| {
+                FetcherError::ParseError("Invalid or missing first_trade_id (f)".to_string())
+            })?;
 
             // Field 'l': Last trade ID
-            let last_trade_id = trade
-                .get("l")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| FetcherError::ParseError("Invalid or missing last_trade_id (l)".to_string()))?;
+            let last_trade_id = trade.get("l").and_then(|v| v.as_i64()).ok_or_else(|| {
+                FetcherError::ParseError("Invalid or missing last_trade_id (l)".to_string())
+            })?;
 
             // Field 'T': Timestamp (integer, milliseconds)
-            let timestamp = trade
-                .get("T")
-                .and_then(|v| v.as_i64())
-                .ok_or_else(|| FetcherError::ParseError("Invalid or missing timestamp (T)".to_string()))?;
+            let timestamp = trade.get("T").and_then(|v| v.as_i64()).ok_or_else(|| {
+                FetcherError::ParseError("Invalid or missing timestamp (T)".to_string())
+            })?;
 
             // Field 'm': Is buyer maker (boolean)
-            let is_buyer_maker = trade
-                .get("m")
-                .and_then(|v| v.as_bool())
-                .ok_or_else(|| FetcherError::ParseError("Invalid or missing is_buyer_maker (m)".to_string()))?;
+            let is_buyer_maker = trade.get("m").and_then(|v| v.as_bool()).ok_or_else(|| {
+                FetcherError::ParseError("Invalid or missing is_buyer_maker (m)".to_string())
+            })?;
 
             aggtrades.push(AggTrade {
                 agg_trade_id,
@@ -183,7 +182,9 @@ impl BinanceParser {
             let funding_time = rate_data
                 .get("fundingTime")
                 .and_then(|v| v.as_i64())
-                .ok_or_else(|| FetcherError::ParseError("Missing or invalid fundingTime".to_string()))?;
+                .ok_or_else(|| {
+                    FetcherError::ParseError("Missing or invalid fundingTime".to_string())
+                })?;
 
             funding_rates.push(FundingRate {
                 symbol,
@@ -222,7 +223,7 @@ impl BinanceParser {
         // Apply format-specific suffix
         match format {
             SymbolFormat::Perpetual => base_symbol,
-            SymbolFormat::CoinPerpetual => format!("{}_PERP", base_symbol),
+            SymbolFormat::CoinPerpetual => format!("{base_symbol}_PERP"),
         }
     }
 
@@ -230,10 +231,9 @@ impl BinanceParser {
     fn parse_decimal(value: &Value, field_name: &str) -> FetcherResult<Decimal> {
         let s = value
             .as_str()
-            .ok_or_else(|| FetcherError::ParseError(format!("{} is not a string", field_name)))?;
+            .ok_or_else(|| FetcherError::ParseError(format!("{field_name} is not a string")))?;
 
-        Decimal::from_str(s).map_err(|e| {
-            FetcherError::ParseError(format!("Failed to parse {}: {}", field_name, e))
-        })
+        Decimal::from_str(s)
+            .map_err(|e| FetcherError::ParseError(format!("Failed to parse {field_name}: {e}")))
     }
 }

@@ -63,10 +63,12 @@
 pub mod config;
 pub mod executor;
 pub mod job;
+pub mod progress;
 pub mod rate_limit;
 
 pub use executor::DownloadExecutor;
 pub use job::{DownloadJob, JobProgress, JobStatus, JobType};
+pub use progress::{DownloadItemType, ProgressState, ProgressTracker};
 pub use rate_limit::{RateLimitError, RateLimiter};
 
 /// Download errors (T035)

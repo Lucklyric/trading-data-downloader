@@ -3,7 +3,7 @@
 use crate::fetcher::binance_futures_usdt::BinanceFuturesUsdtFetcher;
 use crate::fetcher::DataFetcher;
 use crate::registry::IdentifierRegistry;
-use anyhow::{Result, Context};
+use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::json;
 
@@ -89,7 +89,7 @@ impl SourcesCommand {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Error fetching symbols for {}: {}", identifier_str, e);
+                            eprintln!("Error fetching symbols for {identifier_str}: {e}");
                         }
                     }
                 }
@@ -100,8 +100,11 @@ impl SourcesCommand {
         // T103: Output formatting
         match format {
             OutputFormat::Json => {
-                println!("{}", serde_json::to_string_pretty(&all_results)
-                    .context("Failed to serialize results to JSON")?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&all_results)
+                        .context("Failed to serialize results to JSON")?
+                );
             }
             OutputFormat::Human => {
                 println!("Found {} symbols:\n", all_results.len());

@@ -18,7 +18,10 @@ async fn test_archive_availability_check() {
 
     // We don't assert true here because archives might not be available
     // This test just verifies the function works without panicking
-    println!("Archive available for BTCUSDT 1m on 2024-01-01: {}", is_available);
+    println!(
+        "Archive available for BTCUSDT 1m on 2024-01-01: {}",
+        is_available
+    );
 }
 
 #[tokio::test]
@@ -35,7 +38,10 @@ async fn test_download_checksum() {
         .await
     {
         Ok(bars) => {
-            println!("Successfully downloaded {} bars with valid checksum", bars.len());
+            println!(
+                "Successfully downloaded {} bars with valid checksum",
+                bars.len()
+            );
             assert!(!bars.is_empty(), "Should have downloaded some bars");
 
             // Verify bar data integrity

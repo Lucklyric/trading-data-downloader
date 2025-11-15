@@ -22,18 +22,14 @@ async fn test_binance_http_client_get_request() {
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
 
     // Create BinanceHttpClient with real Binance API
-    let http_client = BinanceHttpClient::new(
-        client,
-        "https://fapi.binance.com",
-        rate_limiter.clone(),
-    );
+    let http_client =
+        BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter.clone());
 
     // Test a real GET request to Binance API (exchangeInfo endpoint)
     // This endpoint has low weight and should always succeed
     let params = vec![];
-    let result: Result<serde_json::Value, _> = http_client
-        .get("/fapi/v1/exchangeInfo", &params)
-        .await;
+    let result: Result<serde_json::Value, _> =
+        http_client.get("/fapi/v1/exchangeInfo", &params).await;
 
     // Verify the request succeeded
     assert!(result.is_ok(), "GET request should succeed");
@@ -41,8 +37,14 @@ async fn test_binance_http_client_get_request() {
     let response = result.unwrap();
 
     // Verify response has expected structure
-    assert!(response.get("symbols").is_some(), "Response should contain symbols");
-    assert!(response.get("timezone").is_some(), "Response should contain timezone");
+    assert!(
+        response.get("symbols").is_some(),
+        "Response should contain symbols"
+    );
+    assert!(
+        response.get("timezone").is_some(),
+        "Response should contain timezone"
+    );
 }
 
 /// T196: Test retry logic on network errors
@@ -63,9 +65,7 @@ async fn test_binance_http_client_retry_logic() {
 
     // Attempt GET request - should fail after retries
     let params = vec![];
-    let result: Result<serde_json::Value, _> = http_client
-        .get("/api/endpoint", &params)
-        .await;
+    let result: Result<serde_json::Value, _> = http_client.get("/api/endpoint", &params).await;
 
     // Verify the request failed after retries
     assert!(result.is_err(), "Request should fail on network error");
@@ -90,30 +90,31 @@ async fn test_binance_http_client_weight_tracking() {
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
 
     // Verify rate limiter is weight-based
-    assert!(rate_limiter.is_weight_based(), "Rate limiter should be weight-based");
+    assert!(
+        rate_limiter.is_weight_based(),
+        "Rate limiter should be weight-based"
+    );
 
     // Create BinanceHttpClient with real Binance API
-    let http_client = BinanceHttpClient::new(
-        client,
-        "https://fapi.binance.com",
-        rate_limiter.clone(),
-    );
+    let http_client =
+        BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter.clone());
 
     // Make a real request to Binance API
     let params = vec![];
-    let result: Result<serde_json::Value, _> = http_client
-        .get("/fapi/v1/exchangeInfo", &params)
-        .await;
+    let result: Result<serde_json::Value, _> =
+        http_client.get("/fapi/v1/exchangeInfo", &params).await;
 
     // Verify the request succeeded
-    assert!(result.is_ok(), "GET request should succeed for weight tracking test");
+    assert!(
+        result.is_ok(),
+        "GET request should succeed for weight tracking test"
+    );
 
     // Make multiple requests to verify weight accumulation doesn't block
     // (with generous limits, requests should succeed)
     for _ in 0..3 {
-        let result: Result<serde_json::Value, _> = http_client
-            .get("/fapi/v1/exchangeInfo", &params)
-            .await;
+        let result: Result<serde_json::Value, _> =
+            http_client.get("/fapi/v1/exchangeInfo", &params).await;
 
         assert!(result.is_ok(), "Subsequent requests should succeed");
     }
@@ -129,11 +130,7 @@ async fn test_binance_http_client_with_params() {
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
 
     // Create BinanceHttpClient
-    let http_client = BinanceHttpClient::new(
-        client,
-        "https://fapi.binance.com",
-        rate_limiter,
-    );
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
 
     // Test request with query parameters
     let params = vec![
@@ -141,9 +138,8 @@ async fn test_binance_http_client_with_params() {
         ("limit", "100".to_string()),
     ];
 
-    let result: Result<serde_json::Value, _> = http_client
-        .get("/fapi/v1/fundingRate", &params)
-        .await;
+    let result: Result<serde_json::Value, _> =
+        http_client.get("/fapi/v1/fundingRate", &params).await;
 
     // Verify the request succeeded
     assert!(result.is_ok(), "GET request with params should succeed");
@@ -151,5 +147,8 @@ async fn test_binance_http_client_with_params() {
     let response = result.unwrap();
 
     // Verify response is an array
-    assert!(response.is_array(), "Response should be an array of funding rates");
+    assert!(
+        response.is_array(),
+        "Response should be an array of funding rates"
+    );
 }

@@ -107,8 +107,7 @@ impl IdentifierRegistry {
                 return Ok(vec![id]);
             } else {
                 return Err(RegistryError::NotFound(format!(
-                    "Pattern {} does not match any identifier",
-                    pattern
+                    "Pattern {pattern} does not match any identifier"
                 )));
             }
         }
@@ -117,8 +116,7 @@ impl IdentifierRegistry {
         let pattern_parts: Vec<&str> = pattern.split(':').collect();
         if pattern_parts.len() != 3 {
             return Err(RegistryError::ParseError(format!(
-                "Invalid pattern format: {}. Expected EXCHANGE:BASE/QUOTE:SETTLE",
-                pattern
+                "Invalid pattern format: {pattern}. Expected EXCHANGE:BASE/QUOTE:SETTLE"
             )));
         }
 
@@ -129,8 +127,7 @@ impl IdentifierRegistry {
         let pair_parts: Vec<&str> = pair_pattern.split('/').collect();
         if pair_parts.len() != 2 {
             return Err(RegistryError::ParseError(format!(
-                "Invalid pair pattern: {}. Expected BASE/QUOTE",
-                pair_pattern
+                "Invalid pair pattern: {pair_pattern}. Expected BASE/QUOTE"
             )));
         }
 
@@ -154,8 +151,7 @@ impl IdentifierRegistry {
 
         if matches.is_empty() {
             return Err(RegistryError::NotFound(format!(
-                "Pattern {} does not match any identifier",
-                pattern
+                "Pattern {pattern} does not match any identifier"
             )));
         }
 

@@ -12,18 +12,18 @@ fn test_binance_parser_klines_to_bars() {
     // Sample klines response from Binance API (12 elements per kline)
     let klines_json = vec![
         json!([
-            1699920000000i64,      // 0: Open time
-            "35000.50",            // 1: Open price
-            "35100.00",            // 2: High price
-            "34950.00",            // 3: Low price
-            "35050.75",            // 4: Close price
-            "1234.567",            // 5: Volume
-            1699920059999i64,      // 6: Close time
-            "43210987.65",         // 7: Quote volume
-            5432,                  // 8: Number of trades
-            "617.283",             // 9: Taker buy base volume
-            "21605493.82",         // 10: Taker buy quote volume
-            "0"                    // 11: Ignore
+            1699920000000i64, // 0: Open time
+            "35000.50",       // 1: Open price
+            "35100.00",       // 2: High price
+            "34950.00",       // 3: Low price
+            "35050.75",       // 4: Close price
+            "1234.567",       // 5: Volume
+            1699920059999i64, // 6: Close time
+            "43210987.65",    // 7: Quote volume
+            5432,             // 8: Number of trades
+            "617.283",        // 9: Taker buy base volume
+            "21605493.82",    // 10: Taker buy quote volume
+            "0"               // 11: Ignore
         ]),
         json!([
             1699920060000i64,
@@ -56,8 +56,14 @@ fn test_binance_parser_klines_to_bars() {
     assert_eq!(bar1.close, Decimal::from_str("35050.75").unwrap());
     assert_eq!(bar1.volume, Decimal::from_str("1234.567").unwrap());
     assert_eq!(bar1.quote_volume, Decimal::from_str("43210987.65").unwrap());
-    assert_eq!(bar1.taker_buy_base_volume, Decimal::from_str("617.283").unwrap());
-    assert_eq!(bar1.taker_buy_quote_volume, Decimal::from_str("21605493.82").unwrap());
+    assert_eq!(
+        bar1.taker_buy_base_volume,
+        Decimal::from_str("617.283").unwrap()
+    );
+    assert_eq!(
+        bar1.taker_buy_quote_volume,
+        Decimal::from_str("21605493.82").unwrap()
+    );
 
     // Verify second bar
     let bar2 = &bars[1];
@@ -140,7 +146,10 @@ fn test_binance_parser_funding_to_funding_rates() {
     // Verify second rate
     let rate2 = &rates[1];
     assert_eq!(rate2.symbol, "ETHUSDT");
-    assert_eq!(rate2.funding_rate, Decimal::from_str("-0.00005000").unwrap());
+    assert_eq!(
+        rate2.funding_rate,
+        Decimal::from_str("-0.00005000").unwrap()
+    );
     assert_eq!(rate2.funding_time, 1699948800000);
 }
 

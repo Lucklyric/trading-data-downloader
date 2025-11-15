@@ -37,9 +37,7 @@ impl BinanceFuturesCoinFetcher {
             global_binance_rate_limiter(),
         );
 
-        Self {
-            http_client,
-        }
+        Self { http_client }
     }
 
     /// Create with custom base URL (for testing)
@@ -53,9 +51,7 @@ impl BinanceFuturesCoinFetcher {
             global_binance_rate_limiter(),
         );
 
-        Self {
-            http_client,
-        }
+        Self { http_client }
     }
 
     /// Parse a symbol from exchangeInfo response (T159)
@@ -75,16 +71,19 @@ impl BinanceFuturesCoinFetcher {
         let contract_type_str = symbol_data
             .get("contractType")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| FetcherError::ParseError("Missing or invalid contractType".to_string()))?;
-        let contract_type = ContractType::from_str(contract_type_str)
-            .map_err(|e| FetcherError::ParseError(e))?;
+            .ok_or_else(|| {
+                FetcherError::ParseError("Missing or invalid contractType".to_string())
+            })?;
+        let contract_type =
+            ContractType::from_str(contract_type_str).map_err(FetcherError::ParseError)?;
 
         let status_str = symbol_data
             .get("contractStatus")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| FetcherError::ParseError("Missing or invalid contractStatus".to_string()))?;
-        let status = TradingStatus::from_str(status_str)
-            .map_err(|e| FetcherError::ParseError(e))?;
+            .ok_or_else(|| {
+                FetcherError::ParseError("Missing or invalid contractStatus".to_string())
+            })?;
+        let status = TradingStatus::from_str(status_str).map_err(FetcherError::ParseError)?;
 
         let base_asset = symbol_data
             .get("baseAsset")
@@ -107,14 +106,16 @@ impl BinanceFuturesCoinFetcher {
         let price_precision = symbol_data
             .get("pricePrecision")
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| FetcherError::ParseError("Missing or invalid pricePrecision".to_string()))?
-            as u8;
+            .ok_or_else(|| {
+                FetcherError::ParseError("Missing or invalid pricePrecision".to_string())
+            })? as u8;
 
         let quantity_precision = symbol_data
             .get("quantityPrecision")
             .and_then(|v| v.as_u64())
-            .ok_or_else(|| FetcherError::ParseError("Missing or invalid quantityPrecision".to_string()))?
-            as u8;
+            .ok_or_else(|| {
+                FetcherError::ParseError("Missing or invalid quantityPrecision".to_string())
+            })? as u8;
 
         // Extract tick_size and step_size from filters
         let filters = symbol_data
@@ -135,14 +136,14 @@ impl BinanceFuturesCoinFetcher {
                 "PRICE_FILTER" => {
                     if let Some(ts) = filter.get("tickSize").and_then(|v| v.as_str()) {
                         tick_size = Some(Decimal::from_str(ts).map_err(|e| {
-                            FetcherError::ParseError(format!("Invalid tickSize: {}", e))
+                            FetcherError::ParseError(format!("Invalid tickSize: {e}"))
                         })?);
                     }
                 }
                 "LOT_SIZE" => {
                     if let Some(ss) = filter.get("stepSize").and_then(|v| v.as_str()) {
                         step_size = Some(Decimal::from_str(ss).map_err(|e| {
-                            FetcherError::ParseError(format!("Invalid stepSize: {}", e))
+                            FetcherError::ParseError(format!("Invalid stepSize: {e}"))
                         })?);
                     }
                 }
@@ -150,8 +151,9 @@ impl BinanceFuturesCoinFetcher {
             }
         }
 
-        let tick_size = tick_size
-            .ok_or_else(|| FetcherError::ParseError("Missing tickSize in PRICE_FILTER".to_string()))?;
+        let tick_size = tick_size.ok_or_else(|| {
+            FetcherError::ParseError("Missing tickSize in PRICE_FILTER".to_string())
+        })?;
         let step_size = step_size
             .ok_or_else(|| FetcherError::ParseError("Missing stepSize in LOT_SIZE".to_string()))?;
 
@@ -326,51 +328,44 @@ impl BinanceFuturesCoinFetcher {
     ) -> FundingStream {
         let fetcher = self.clone();
 
-        let stream = stream::unfold(
-            (start_time, false),
-            move |(current_time, done)| {
-                let fetcher = fetcher.clone();
-                let symbol = symbol.clone();
+        let stream = stream::unfold((start_time, false), move |(current_time, done)| {
+            let fetcher = fetcher.clone();
+            let symbol = symbol.clone();
 
-                async move {
-                    if done || current_time >= end_time {
-                        return None;
+            async move {
+                if done || current_time >= end_time {
+                    return None;
+                }
+
+                // Fetch next batch
+                match fetcher
+                    .fetch_funding_batch(&symbol, current_time, end_time, FUNDING_RATE_LIMIT)
+                    .await
+                {
+                    Ok(rates) => {
+                        if rates.is_empty() {
+                            // No more data available
+                            return None;
+                        }
+
+                        // Get the last rate's funding time to determine next starting point
+                        let last_funding_time =
+                            rates.last().map(|r| r.funding_time).unwrap_or(current_time);
+                        let next_time = last_funding_time + 1; // Start from next millisecond
+
+                        // Convert rates to stream items
+                        let items: Vec<FetcherResult<FundingRate>> =
+                            rates.into_iter().map(Ok).collect();
+
+                        Some((stream::iter(items), (next_time, false)))
                     }
-
-                    // Fetch next batch
-                    match fetcher
-                        .fetch_funding_batch(
-                            &symbol,
-                            current_time,
-                            end_time,
-                            FUNDING_RATE_LIMIT,
-                        )
-                        .await
-                    {
-                        Ok(rates) => {
-                            if rates.is_empty() {
-                                // No more data available
-                                return None;
-                            }
-
-                            // Get the last rate's funding time to determine next starting point
-                            let last_funding_time = rates.last().map(|r| r.funding_time).unwrap_or(current_time);
-                            let next_time = last_funding_time + 1; // Start from next millisecond
-
-                            // Convert rates to stream items
-                            let items: Vec<FetcherResult<FundingRate>> =
-                                rates.into_iter().map(Ok).collect();
-
-                            Some((stream::iter(items), (next_time, false)))
-                        }
-                        Err(e) => {
-                            // Return error and mark as done
-                            Some((stream::iter(vec![Err(e)]), (current_time, true)))
-                        }
+                    Err(e) => {
+                        // Return error and mark as done
+                        Some((stream::iter(vec![Err(e)]), (current_time, true)))
                     }
                 }
-            },
-        )
+            }
+        })
         .flatten();
 
         Box::pin(stream)
@@ -388,53 +383,44 @@ impl BinanceFuturesCoinFetcher {
         let interval_str = interval.to_string();
         let _interval_ms = interval.to_milliseconds();
 
-        let stream = stream::unfold(
-            (start_time, false),
-            move |(current_time, done)| {
-                let fetcher = fetcher.clone();
-                let symbol = symbol.clone();
-                let interval_str = interval_str.clone();
+        let stream = stream::unfold((start_time, false), move |(current_time, done)| {
+            let fetcher = fetcher.clone();
+            let symbol = symbol.clone();
+            let interval_str = interval_str.clone();
 
-                async move {
-                    if done || current_time >= end_time {
-                        return None;
+            async move {
+                if done || current_time >= end_time {
+                    return None;
+                }
+
+                // Fetch next batch
+                match fetcher
+                    .fetch_klines_batch(&symbol, &interval_str, current_time, end_time, MAX_LIMIT)
+                    .await
+                {
+                    Ok(bars) => {
+                        if bars.is_empty() {
+                            // No more data available
+                            return None;
+                        }
+
+                        // Get the last bar's close time to determine next starting point
+                        let last_close_time =
+                            bars.last().map(|b| b.close_time).unwrap_or(current_time);
+                        let next_time = last_close_time + 1; // Start from next millisecond
+
+                        // Convert bars to stream items
+                        let items: Vec<FetcherResult<Bar>> = bars.into_iter().map(Ok).collect();
+
+                        Some((stream::iter(items), (next_time, false)))
                     }
-
-                    // Fetch next batch
-                    match fetcher
-                        .fetch_klines_batch(
-                            &symbol,
-                            &interval_str,
-                            current_time,
-                            end_time,
-                            MAX_LIMIT,
-                        )
-                        .await
-                    {
-                        Ok(bars) => {
-                            if bars.is_empty() {
-                                // No more data available
-                                return None;
-                            }
-
-                            // Get the last bar's close time to determine next starting point
-                            let last_close_time = bars.last().map(|b| b.close_time).unwrap_or(current_time);
-                            let next_time = last_close_time + 1; // Start from next millisecond
-
-                            // Convert bars to stream items
-                            let items: Vec<FetcherResult<Bar>> =
-                                bars.into_iter().map(Ok).collect();
-
-                            Some((stream::iter(items), (next_time, false)))
-                        }
-                        Err(e) => {
-                            // Return error and mark as done
-                            Some((stream::iter(vec![Err(e)]), (current_time, true)))
-                        }
+                    Err(e) => {
+                        // Return error and mark as done
+                        Some((stream::iter(vec![Err(e)]), (current_time, true)))
                     }
                 }
-            },
-        )
+            }
+        })
         .flatten();
 
         Box::pin(stream)
@@ -491,10 +477,7 @@ impl BinanceFuturesCoinFetcher {
                                 }
                                 // Move to next 1-hour chunk
                                 let next_chunk_start = chunk_end;
-                                Some((
-                                    stream::iter(vec![]),
-                                    (next_chunk_start, None, None, false),
-                                ))
+                                Some((stream::iter(vec![]), (next_chunk_start, None, None, false)))
                             } else {
                                 // Got trades, check if we need more from this chunk
                                 let last_trade = trades.last().unwrap();
@@ -515,7 +498,10 @@ impl BinanceFuturesCoinFetcher {
                                     // Partial batch, move to next chunk
                                     if chunk_end >= end_time {
                                         // This was the last chunk
-                                        Some((stream::iter(items), (chunk_start, Some(chunk_end), None, true)))
+                                        Some((
+                                            stream::iter(items),
+                                            (chunk_start, Some(chunk_end), None, true),
+                                        ))
                                     } else {
                                         let next_chunk_start = chunk_end;
                                         Some((
@@ -528,7 +514,10 @@ impl BinanceFuturesCoinFetcher {
                         }
                         Err(e) => {
                             // Return error and mark as done
-                            Some((stream::iter(vec![Err(e)]), (chunk_start, Some(chunk_end), None, true)))
+                            Some((
+                                stream::iter(vec![Err(e)]),
+                                (chunk_start, Some(chunk_end), None, true),
+                            ))
                         }
                     }
                 }
@@ -550,9 +539,7 @@ impl Clone for BinanceFuturesCoinFetcher {
             global_binance_rate_limiter(),
         );
 
-        Self {
-            http_client,
-        }
+        Self { http_client }
     }
 }
 
@@ -573,10 +560,7 @@ impl DataFetcher for BinanceFuturesCoinFetcher {
     ) -> FetcherResult<BarStream> {
         info!(
             "Creating bar stream: symbol={}, interval={}, range=[{}, {})",
-            symbol,
-            interval,
-            start_time,
-            end_time
+            symbol, interval, start_time, end_time
         );
 
         let interval_ms = interval.to_milliseconds();
@@ -601,9 +585,7 @@ impl DataFetcher for BinanceFuturesCoinFetcher {
     ) -> FetcherResult<super::AggTradeStream> {
         info!(
             "Creating aggTrades stream: symbol={}, range=[{}, {})",
-            symbol,
-            start_time,
-            end_time
+            symbol, start_time, end_time
         );
 
         // Calculate number of 1-hour chunks
@@ -623,9 +605,7 @@ impl DataFetcher for BinanceFuturesCoinFetcher {
     ) -> FetcherResult<super::FundingStream> {
         info!(
             "Creating funding rate stream: symbol={}, range=[{}, {})",
-            symbol,
-            start_time,
-            end_time
+            symbol, start_time, end_time
         );
 
         Ok(self.create_funding_stream(symbol.to_string(), start_time, end_time))

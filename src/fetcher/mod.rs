@@ -65,6 +65,7 @@ pub mod binance_futures_usdt;
 pub mod binance_http;
 pub mod binance_parser;
 pub mod pagination;
+pub mod retry_formatter;
 pub mod shared_resources;
 
 /// Fetcher errors (T033)
@@ -104,7 +105,7 @@ pub enum FetcherError {
         /// Expected checksum value
         expected: String,
         /// Actual checksum value
-        actual: String
+        actual: String,
     },
 
     /// Unsupported settlement asset
@@ -221,8 +222,12 @@ pub fn create_fetcher(identifier: &ExchangeIdentifier) -> FetcherResult<Box<dyn 
 
     // Route based on settlement asset
     match identifier.settle() {
-        "USDT" | "BUSD" => Ok(Box::new(binance_futures_usdt::BinanceFuturesUsdtFetcher::new())),
-        "BTC" | "ETH" | "USD" => Ok(Box::new(binance_futures_coin::BinanceFuturesCoinFetcher::new())),
+        "USDT" | "BUSD" => Ok(Box::new(
+            binance_futures_usdt::BinanceFuturesUsdtFetcher::new(),
+        )),
+        "BTC" | "ETH" | "USD" => Ok(Box::new(
+            binance_futures_coin::BinanceFuturesCoinFetcher::new(),
+        )),
         _ => Err(FetcherError::UnsupportedAsset(
             identifier.settle().to_string(),
         )),

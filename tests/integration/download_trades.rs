@@ -4,11 +4,11 @@
 //! Tests are written first (TDD) and will fail until implementation is complete.
 
 use chrono::{DateTime, Utc};
-use std::path::PathBuf;
-use tempfile::TempDir;
-use trading_data_downloader::{AggTrade, output::OutputWriter};
 use rust_decimal::Decimal;
+use std::path::PathBuf;
 use std::str::FromStr;
+use tempfile::TempDir;
+use trading_data_downloader::{output::OutputWriter, AggTrade};
 
 /// T111: Test for AggTrade struct validation
 /// Verifies that AggTrade struct properly validates trade data
@@ -69,11 +69,11 @@ fn test_aggtrade_struct_validation() {
 #[tokio::test]
 #[ignore] // Remove when implementation is complete
 async fn test_aggtrades_download_end_to_end() {
+    use futures_util::StreamExt;
     use trading_data_downloader::fetcher::binance_futures_usdt::BinanceFuturesUsdtFetcher;
     use trading_data_downloader::fetcher::DataFetcher;
     use trading_data_downloader::output::csv::CsvAggTradesWriter;
     use trading_data_downloader::output::AggTradesWriter;
-    use futures_util::StreamExt;
 
     // Setup temporary output directory
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -93,13 +93,14 @@ async fn test_aggtrades_download_end_to_end() {
         .expect("Failed to create stream");
 
     // Create writer
-    let mut writer = CsvAggTradesWriter::new(&output_path)
-        .expect("Failed to create writer");
+    let mut writer = CsvAggTradesWriter::new(&output_path).expect("Failed to create writer");
 
     let mut trade_count = 0;
     while let Some(result) = stream.next().await {
         let trade = result.expect("Failed to fetch trade");
-        writer.write_aggtrade(&trade).expect("Failed to write trade");
+        writer
+            .write_aggtrade(&trade)
+            .expect("Failed to write trade");
         trade_count += 1;
     }
 
@@ -109,8 +110,7 @@ async fn test_aggtrades_download_end_to_end() {
     // Verify output file exists and contains data
     assert!(output_path.exists(), "Output file should exist");
 
-    let content = std::fs::read_to_string(&output_path)
-        .expect("Failed to read output file");
+    let content = std::fs::read_to_string(&output_path).expect("Failed to read output file");
 
     // Verify CSV header
     let lines: Vec<&str> = content.lines().collect();
@@ -133,10 +133,10 @@ async fn test_aggtrades_download_end_to_end() {
 #[tokio::test]
 #[ignore] // Remove when implementation is complete
 async fn test_aggtrades_download_resume() {
+    use std::sync::Arc;
     use trading_data_downloader::downloader::executor::DownloadExecutor;
     use trading_data_downloader::downloader::job::{DownloadJob, JobType};
     use trading_data_downloader::resume::state::ResumeState;
-    use std::sync::Arc;
 
     // Setup temporary directories
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -161,9 +161,7 @@ async fn test_aggtrades_download_resume() {
 
     // Start download (this will be interrupted)
     let job_clone = job.clone();
-    let handle = tokio::spawn(async move {
-        executor1.execute_aggtrades_job(job_clone).await
-    });
+    let handle = tokio::spawn(async move { executor1.execute_aggtrades_job(job_clone).await });
 
     // Wait a bit then cancel
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -184,15 +182,21 @@ async fn test_aggtrades_download_resume() {
     match result {
         Ok(_) => {
             // Verify output file exists
-            assert!(output_path.exists(), "Output file should exist after resume");
+            assert!(
+                output_path.exists(),
+                "Output file should exist after resume"
+            );
 
-            let content = std::fs::read_to_string(&output_path)
-                .expect("Failed to read output file");
+            let content =
+                std::fs::read_to_string(&output_path).expect("Failed to read output file");
 
             let lines: Vec<&str> = content.lines().collect();
             assert!(!lines.is_empty(), "Output should contain data");
 
-            println!("Successfully resumed and completed download with {} lines", lines.len());
+            println!(
+                "Successfully resumed and completed download with {} lines",
+                lines.len()
+            );
         }
         Err(e) => {
             println!("Download error (may be expected if no trades): {}", e);
@@ -205,9 +209,9 @@ async fn test_aggtrades_download_resume() {
 /// but we also test it at the integration level here
 #[tokio::test]
 async fn test_aggtrades_one_hour_window_chunking() {
+    use futures_util::StreamExt;
     use trading_data_downloader::fetcher::binance_futures_usdt::BinanceFuturesUsdtFetcher;
     use trading_data_downloader::fetcher::DataFetcher;
-    use futures_util::StreamExt;
 
     let fetcher = BinanceFuturesUsdtFetcher::new();
 
@@ -241,5 +245,8 @@ async fn test_aggtrades_one_hour_window_chunking() {
         }
     }
 
-    println!("Fetched {} trades across 2-hour window using chunking", trade_count);
+    println!(
+        "Fetched {} trades across 2-hour window using chunking",
+        trade_count
+    );
 }
