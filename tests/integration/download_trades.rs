@@ -3,9 +3,8 @@
 //! These tests verify end-to-end functionality for downloading aggregate trade data.
 //! Tests are written first (TDD) and will fail until implementation is complete.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use rust_decimal::Decimal;
-use std::path::PathBuf;
 use std::str::FromStr;
 use tempfile::TempDir;
 use trading_data_downloader::{output::OutputWriter, AggTrade};
@@ -133,10 +132,10 @@ async fn test_aggtrades_download_end_to_end() {
 #[tokio::test]
 #[ignore] // Remove when implementation is complete
 async fn test_aggtrades_download_resume() {
-    use std::sync::Arc;
+    
     use trading_data_downloader::downloader::executor::DownloadExecutor;
-    use trading_data_downloader::downloader::job::{DownloadJob, JobType};
-    use trading_data_downloader::resume::state::ResumeState;
+    use trading_data_downloader::downloader::job::DownloadJob;
+    
 
     // Setup temporary directories
     let temp_dir = TempDir::new().expect("Failed to create temp dir");

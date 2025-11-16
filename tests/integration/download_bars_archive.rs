@@ -128,7 +128,7 @@ fn test_should_use_archive_logic() {
 #[test]
 fn test_date_range_generation() {
     // Test T057: Date range for archive downloads
-    use chrono::DateTime;
+    
 
     let start_time = 1704067200000; // 2024-01-01 00:00:00 UTC
     let end_time = 1704326400000; // 2024-01-04 00:00:00 UTC
@@ -194,7 +194,7 @@ async fn test_checksum_validation_failure() {
 #[test]
 fn test_temporary_file_cleanup() {
     // Test T063: Temporary file handling
-    use std::path::Path;
+    
 
     // Create a temporary directory
     let temp_dir = tempfile::tempdir().expect("Should create temp dir");

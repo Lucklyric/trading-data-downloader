@@ -2,9 +2,7 @@
 //!
 //! These tests verify the end-to-end functionality of downloading funding rate data.
 
-use chrono::{DateTime, Timelike, Utc};
-use std::path::PathBuf;
-use tempfile::TempDir;
+use chrono::{Timelike, Utc};
 
 /// T132: Integration test for funding rate download end-to-end
 /// This test verifies that we can successfully download funding rate data
@@ -207,7 +205,7 @@ async fn test_download_executor_funding_job() {
 #[test]
 #[ignore] // Requires full CLI integration - run manually with `cargo test --ignored`
 fn test_cli_funding_command() {
-    use std::path::PathBuf;
+    
     use std::process::Command;
     use tempfile::TempDir;
 

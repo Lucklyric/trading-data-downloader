@@ -8,7 +8,6 @@ use std::time::Duration;
 use trading_data_downloader::downloader::rate_limit::RateLimiter;
 use trading_data_downloader::fetcher::binance_http::BinanceHttpClient;
 use trading_data_downloader::fetcher::pagination::PaginationHelper;
-use trading_data_downloader::fetcher::FetcherResult;
 use trading_data_downloader::{AggTrade, Bar, FundingRate};
 
 /// Helper struct to track fetch calls

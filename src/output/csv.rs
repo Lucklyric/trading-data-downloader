@@ -913,8 +913,7 @@ mod tests {
         let contents = std::fs::read_to_string(&output_path).unwrap();
         assert!(
             contents.starts_with("open_time,open,high,low,close,volume"),
-            "Expected headers at start of file, got: {}",
-            contents
+            "Expected headers at start of file, got: {contents}"
         );
     }
 
@@ -936,8 +935,7 @@ mod tests {
         // Should have header + 1 data line = 2 lines total
         assert_eq!(
             line_count, 2,
-            "Expected 2 lines (header + data), got: {}\nContents:\n{}",
-            line_count, contents
+            "Expected 2 lines (header + data), got: {line_count}\nContents:\n{contents}"
         );
 
         // Read and verify with CSV reader

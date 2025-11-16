@@ -1,7 +1,7 @@
 //! Integration tests for logging and tracing (T166)
 
 use tracing::{error, info, warn};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::EnvFilter;
 
 #[test]
 fn test_tracing_subscriber_initialization() {
