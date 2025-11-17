@@ -61,7 +61,6 @@ List available symbols:
 ## Documentation
 
 - [Usage Guide](docs/usage.md) - Detailed command examples and common workflows
-- [Metrics Guide](docs/metrics.md) - Observability and monitoring
 
 ## Requirements
 
