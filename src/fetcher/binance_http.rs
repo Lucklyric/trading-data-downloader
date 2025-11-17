@@ -111,7 +111,8 @@ impl BinanceHttpClient {
         let endpoint = url.strip_prefix(&self.base_url).unwrap_or(url);
         let symbol = extract_symbol_from_params(params);
         let date_range = extract_time_range_from_params(params);
-        let max_attempts = self.max_retries as usize;
+        // Loop performs max_retries + 1 total attempts (0..=max_retries)
+        let max_attempts = (self.max_retries as usize) + 1;
 
         'attempts: for attempt in 0..=self.max_retries {
             if self.shutdown_requested() {

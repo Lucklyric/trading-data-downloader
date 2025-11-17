@@ -2,6 +2,7 @@
 //!
 //! Tests for listing symbols from Binance Futures exchanges
 
+use trading_data_downloader::fetcher::binance_futures_coin::BinanceFuturesCoinFetcher;
 use trading_data_downloader::fetcher::binance_futures_usdt::BinanceFuturesUsdtFetcher;
 use trading_data_downloader::fetcher::DataFetcher;
 use trading_data_downloader::{ContractType, TradingStatus};
@@ -174,4 +175,50 @@ fn test_wildcard_pattern_matching() {
     // 4. Invalid patterns fail appropriately
 
     // TODO: Implement when resolve_pattern() is available
+}
+
+/// US2 Test: COIN-margined symbol discovery (Feature 003)
+/// This test verifies BinanceFuturesCoinFetcher can discover symbols from DAPI
+#[tokio::test]
+#[ignore] // Ignore by default as this makes real network requests
+async fn test_coin_margined_symbol_discovery() {
+    // Create a BinanceFuturesCoinFetcher with max_retries=5
+    let fetcher = BinanceFuturesCoinFetcher::new(5);
+
+    // Call list_symbols() to fetch from DAPI (dapi.binance.com)
+    let symbols = fetcher
+        .list_symbols()
+        .await
+        .expect("Failed to list COIN-margined symbols");
+
+    // Verify we get a list of symbols
+    assert!(!symbols.is_empty(), "Should have at least one COIN-margined symbol");
+
+    // Verify symbols have required fields
+    for symbol in &symbols {
+        assert!(!symbol.symbol.is_empty(), "Symbol name should not be empty");
+        assert!(symbol.validate().is_ok(), "Symbol should be valid");
+    }
+
+    // Verify we can filter by TRADING status
+    let trading_symbols: Vec<_> = symbols
+        .iter()
+        .filter(|s| s.status == TradingStatus::Trading)
+        .collect();
+    assert!(
+        !trading_symbols.is_empty(),
+        "Should have at least one TRADING COIN-margined symbol"
+    );
+
+    // Verify tick_size and step_size are present
+    for symbol in symbols.iter().take(5) {
+        assert!(
+            symbol.tick_size > rust_decimal::Decimal::ZERO,
+            "Tick size should be positive for COIN-margined"
+        );
+        assert!(
+            symbol.step_size > rust_decimal::Decimal::ZERO,
+            "Step size should be positive for COIN-margined"
+        );
+    }
 }
