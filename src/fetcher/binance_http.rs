@@ -11,7 +11,7 @@ use serde::de::DeserializeOwned;
 use std::{sync::Arc, time::Duration};
 use tracing::{debug, error, info, warn};
 
-use crate::downloader::config::{calculate_backoff, MAX_RETRIES};
+use crate::downloader::config::calculate_backoff;
 use crate::downloader::rate_limit::RateLimiter;
 use crate::fetcher::retry_formatter::{extract_error_type, RetryContext, RetryErrorType};
 use crate::fetcher::{FetcherError, FetcherResult};
@@ -24,6 +24,7 @@ pub struct BinanceHttpClient {
     base_url: String,
     rate_limiter: Arc<RateLimiter>,
     shutdown: Option<SharedShutdown>,
+    max_retries: u32,
 }
 
 impl BinanceHttpClient {
@@ -33,17 +34,25 @@ impl BinanceHttpClient {
     /// * `client` - Shared HTTP client (Arc for cheap cloning)
     /// * `base_url` - Base URL for API endpoints (e.g., "<https://fapi.binance.com>")
     /// * `rate_limiter` - Shared rate limiter (Arc for global quota enforcement)
+    /// * `max_retries` - Maximum number of retry attempts for failed requests
     pub fn new(
         client: impl Into<Arc<Client>>,
         base_url: impl Into<String>,
         rate_limiter: Arc<RateLimiter>,
+        max_retries: u32,
     ) -> Self {
         Self {
             client: client.into(),
             base_url: base_url.into(),
             rate_limiter,
             shutdown: shutdown::get_global_shutdown(),
+            max_retries,
         }
+    }
+
+    /// Get the configured max_retries value
+    pub fn max_retries(&self) -> u32 {
+        self.max_retries
     }
 
     /// Execute GET request with generic deserialization (T200)
@@ -102,9 +111,9 @@ impl BinanceHttpClient {
         let endpoint = url.strip_prefix(&self.base_url).unwrap_or(url);
         let symbol = extract_symbol_from_params(params);
         let date_range = extract_time_range_from_params(params);
-        let max_attempts = (MAX_RETRIES + 1) as usize;
+        let max_attempts = (self.max_retries + 1) as usize;
 
-        'attempts: for attempt in 0..=MAX_RETRIES {
+        'attempts: for attempt in 0..=self.max_retries {
             if self.shutdown_requested() {
                 last_error = Some(FetcherError::NetworkError("Shutdown requested".to_string()));
                 break;
@@ -119,7 +128,7 @@ impl BinanceHttpClient {
                     warn!(
                         "Network error on attempt {}/{}: {}",
                         attempt + 1,
-                        MAX_RETRIES + 1,
+                        self.max_retries + 1,
                         e
                     );
                     request_metrics.record_network_error();
@@ -129,7 +138,7 @@ impl BinanceHttpClient {
                     last_error_type = Some(error_type);
 
                     // Retry on network errors
-                    if attempt < MAX_RETRIES {
+                    if attempt < self.max_retries {
                         let backoff = calculate_backoff(attempt);
                         debug!("Retrying after {:?}", backoff);
                         record_retry_backoff(backoff, attempt);
@@ -162,7 +171,7 @@ impl BinanceHttpClient {
                 warn!(
                     "Rate limit error (429) on attempt {}/{}",
                     attempt + 1,
-                    MAX_RETRIES + 1
+                    self.max_retries + 1
                 );
                 request_metrics.record_complete(429);
                 last_error = Some(FetcherError::RateLimitExceeded);
@@ -170,7 +179,7 @@ impl BinanceHttpClient {
                 let error_type = extract_error_type(Some(status), None);
                 last_error_type = Some(error_type);
 
-                if attempt < MAX_RETRIES {
+                if attempt < self.max_retries {
                     let backoff = calculate_backoff(attempt);
                     debug!("Retrying after {:?}", backoff);
                     record_retry_backoff(backoff, attempt);
@@ -201,7 +210,7 @@ impl BinanceHttpClient {
                     "Server error {} on attempt {}/{}",
                     status,
                     attempt + 1,
-                    MAX_RETRIES + 1
+                    self.max_retries + 1
                 );
                 request_metrics.record_complete(status.as_u16());
                 let error_text = format!("Server error: {status}");
@@ -209,7 +218,7 @@ impl BinanceHttpClient {
                 let error_type = extract_error_type(Some(status), None);
                 last_error_type = Some(error_type);
 
-                if attempt < MAX_RETRIES {
+                if attempt < self.max_retries {
                     let backoff = calculate_backoff(attempt);
                     debug!("Retrying after {:?}", backoff);
                     record_retry_backoff(backoff, attempt);
@@ -426,7 +435,7 @@ mod tests {
     fn test_binance_http_client_creation() {
         let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
         assert_eq!(http_client.base_url, "https://fapi.binance.com");
     }
@@ -435,7 +444,7 @@ mod tests {
     fn test_parse_weight_header_valid() {
         let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -451,7 +460,7 @@ mod tests {
     fn test_parse_weight_header_missing() {
         let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
         let headers = reqwest::header::HeaderMap::new();
 
@@ -463,7 +472,7 @@ mod tests {
     fn test_parse_weight_header_invalid() {
         let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(

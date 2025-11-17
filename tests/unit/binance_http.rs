@@ -23,7 +23,7 @@ async fn test_binance_http_client_get_request() {
 
     // Create BinanceHttpClient with real Binance API
     let http_client =
-        BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter.clone());
+        BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter.clone(), 5);
 
     // Test a real GET request to Binance API (exchangeInfo endpoint)
     // This endpoint has low weight and should always succeed
@@ -61,6 +61,7 @@ async fn test_binance_http_client_retry_logic() {
         client,
         "http://invalid-hostname-that-does-not-exist-12345.com",
         rate_limiter,
+        5,
     );
 
     // Attempt GET request - should fail after retries
@@ -97,7 +98,7 @@ async fn test_binance_http_client_weight_tracking() {
 
     // Create BinanceHttpClient with real Binance API
     let http_client =
-        BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter.clone());
+        BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter.clone(), 5);
 
     // Make a real request to Binance API
     let params = vec![];
@@ -130,7 +131,7 @@ async fn test_binance_http_client_with_params() {
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
 
     // Create BinanceHttpClient
-    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
     // Test request with query parameters
     let params = vec![
@@ -151,4 +152,26 @@ async fn test_binance_http_client_with_params() {
         response.is_array(),
         "Response should be an array of funding rates"
     );
+}
+
+/// T005: Test BinanceHttpClient constructor accepts max_retries parameter
+#[test]
+fn test_binance_http_client_constructor_accepts_max_retries() {
+    // Create HTTP client
+    let client = Client::new();
+
+    // Create rate limiter
+    let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
+
+    // Verify constructor accepts max_retries parameter
+    let custom_max_retries = 10u32;
+    let http_client = BinanceHttpClient::new(
+        client,
+        "https://fapi.binance.com",
+        rate_limiter,
+        custom_max_retries,
+    );
+
+    // Verify client was created successfully and max_retries is set correctly
+    assert_eq!(http_client.max_retries(), custom_max_retries);
 }

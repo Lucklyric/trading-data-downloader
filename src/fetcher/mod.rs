@@ -207,12 +207,19 @@ pub trait DataFetcher: Send + Sync {
 /// # Arguments
 /// * `identifier` - Parsed exchange identifier
 ///
+/// # Arguments
+/// * `identifier` - Exchange identifier to determine the correct fetcher
+/// * `max_retries` - Maximum number of retry attempts for failed requests
+///
 /// # Returns
 /// Boxed DataFetcher implementation
 ///
 /// # Errors
 /// Returns error if the settlement asset or exchange is not supported
-pub fn create_fetcher(identifier: &ExchangeIdentifier) -> FetcherResult<Box<dyn DataFetcher>> {
+pub fn create_fetcher(
+    identifier: &ExchangeIdentifier,
+    max_retries: u32,
+) -> FetcherResult<Box<dyn DataFetcher>> {
     // Validate exchange
     if identifier.exchange() != "BINANCE" {
         return Err(FetcherError::UnsupportedExchange(
@@ -223,10 +230,10 @@ pub fn create_fetcher(identifier: &ExchangeIdentifier) -> FetcherResult<Box<dyn 
     // Route based on settlement asset
     match identifier.settle() {
         "USDT" | "BUSD" => Ok(Box::new(
-            binance_futures_usdt::BinanceFuturesUsdtFetcher::new(),
+            binance_futures_usdt::BinanceFuturesUsdtFetcher::new(max_retries),
         )),
         "BTC" | "ETH" | "USD" => Ok(Box::new(
-            binance_futures_coin::BinanceFuturesCoinFetcher::new(),
+            binance_futures_coin::BinanceFuturesCoinFetcher::new(max_retries),
         )),
         _ => Err(FetcherError::UnsupportedAsset(
             identifier.settle().to_string(),

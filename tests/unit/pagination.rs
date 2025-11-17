@@ -93,7 +93,7 @@ async fn test_pagination_klines_first_page() {
     // Create HTTP client
     let client = Client::new();
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
     // Define parameters
     let endpoint = "/fapi/v1/klines";
@@ -160,7 +160,7 @@ async fn test_pagination_klines_first_page() {
 async fn test_pagination_klines_subsequent_pages() {
     let client = Client::new();
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
     let endpoint = "/fapi/v1/klines";
     let symbol = "BTCUSDT";
@@ -231,7 +231,7 @@ async fn test_pagination_klines_subsequent_pages() {
 async fn test_pagination_aggtrades_first_page() {
     let client = Client::new();
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
     let endpoint = "/fapi/v1/aggTrades";
     let symbol = "BTCUSDT";
@@ -289,7 +289,7 @@ async fn test_pagination_aggtrades_first_page() {
 async fn test_pagination_aggtrades_subsequent_pages() {
     let client = Client::new();
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
     let endpoint = "/fapi/v1/aggTrades";
     let symbol = "BTCUSDT";
@@ -360,7 +360,7 @@ async fn test_pagination_aggtrades_subsequent_pages() {
 async fn test_pagination_funding_rates_single_page() {
     let client = Client::new();
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
     let endpoint = "/fapi/v1/fundingRate";
     let symbol = "BTCUSDT";
@@ -420,7 +420,7 @@ async fn test_pagination_funding_rates_single_page() {
 async fn test_pagination_empty_response_handling() {
     let client = Client::new();
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
     let endpoint = "/fapi/v1/klines";
     let symbol = "BTCUSDT";
@@ -470,7 +470,7 @@ async fn test_pagination_empty_response_handling() {
 async fn test_pagination_max_iterations_safeguard() {
     let client = Client::new();
     let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter);
+    let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
     let endpoint = "/fapi/v1/klines";
     let symbol = "BTCUSDT";

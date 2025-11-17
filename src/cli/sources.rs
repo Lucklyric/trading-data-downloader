@@ -70,7 +70,7 @@ impl SourcesCommand {
             if identifier_str.starts_with("BINANCE:") {
                 // Determine if USDT-margined or COIN-margined
                 if identifier_str.contains(":USDT") {
-                    let fetcher = BinanceFuturesUsdtFetcher::new();
+                    let fetcher = BinanceFuturesUsdtFetcher::new(5); // Use default max_retries
                     match fetcher.list_symbols().await {
                         Ok(symbols) => {
                             for symbol in symbols {

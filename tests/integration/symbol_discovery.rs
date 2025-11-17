@@ -12,7 +12,7 @@ use trading_data_downloader::{ContractType, TradingStatus};
 #[ignore] // Ignore by default as this makes real network requests
 async fn test_symbol_discovery_integration() {
     // Create a BinanceFuturesUsdtFetcher
-    let fetcher = BinanceFuturesUsdtFetcher::new();
+    let fetcher = BinanceFuturesUsdtFetcher::new(5);
 
     // Call list_symbols()
     let symbols = fetcher
@@ -111,7 +111,7 @@ async fn test_list_symbols_method() {
     use trading_data_downloader::fetcher::DataFetcher;
 
     // Create a BinanceFuturesUsdtFetcher
-    let fetcher = BinanceFuturesUsdtFetcher::new();
+    let fetcher = BinanceFuturesUsdtFetcher::new(5);
 
     // Call list_symbols()
     let symbols = fetcher

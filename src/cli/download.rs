@@ -68,8 +68,8 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "1")]
     pub concurrency: usize,
 
-    /// Maximum number of retries for failed requests (default: 3)
-    #[arg(long, global = true, default_value = "3")]
+    /// Maximum number of retries for failed requests (default: 5)
+    #[arg(long, global = true, default_value = "5")]
     pub max_retries: usize,
 
     /// Force re-download even if output file already covers the requested range

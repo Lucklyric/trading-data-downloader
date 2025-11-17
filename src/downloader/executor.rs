@@ -278,7 +278,7 @@ impl DownloadExecutor {
         let identifier = ExchangeIdentifier::parse(&job.identifier)
             .map_err(|e| DownloadError::ValidationError(e.to_string()))?;
 
-        create_fetcher(&identifier)
+        create_fetcher(&identifier, self.max_retries)
             .map_err(|e| DownloadError::FetcherError(format!("Failed to create fetcher: {e}")))
     }
 

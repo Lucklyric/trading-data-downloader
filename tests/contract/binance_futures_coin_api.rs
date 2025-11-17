@@ -11,7 +11,7 @@ use trading_data_downloader::Interval;
 #[tokio::test]
 #[ignore] // Requires network access
 async fn test_coin_klines_endpoint() {
-    let fetcher = BinanceFuturesCoinFetcher::new();
+    let fetcher = BinanceFuturesCoinFetcher::new(5);
 
     // Test with BTCUSD_PERP (most liquid COIN-margined contract)
     let end_time = chrono::Utc::now().timestamp_millis();
@@ -52,7 +52,7 @@ async fn test_coin_klines_endpoint() {
 #[tokio::test]
 #[ignore] // Requires network access
 async fn test_coin_exchange_info() {
-    let fetcher = BinanceFuturesCoinFetcher::new();
+    let fetcher = BinanceFuturesCoinFetcher::new(5);
 
     let symbols = fetcher
         .list_symbols()
@@ -87,7 +87,7 @@ async fn test_coin_exchange_info() {
 #[tokio::test]
 #[ignore] // Requires network access
 async fn test_coin_aggtrades_endpoint() {
-    let fetcher = BinanceFuturesCoinFetcher::new();
+    let fetcher = BinanceFuturesCoinFetcher::new(5);
 
     let end_time = chrono::Utc::now().timestamp_millis();
     let start_time = end_time - 1800_000; // 30 minutes ago
@@ -126,7 +126,7 @@ async fn test_coin_aggtrades_endpoint() {
 #[tokio::test]
 #[ignore] // Requires network access
 async fn test_coin_funding_rates() {
-    let fetcher = BinanceFuturesCoinFetcher::new();
+    let fetcher = BinanceFuturesCoinFetcher::new(5);
 
     // Get funding rates for last 7 days
     let end_time = chrono::Utc::now().timestamp_millis();
@@ -173,7 +173,7 @@ async fn test_coin_funding_rates() {
 /// Test DAPI base URL is correct (T152)
 #[test]
 fn test_coin_fetcher_base_url() {
-    let fetcher = BinanceFuturesCoinFetcher::new();
+    let fetcher = BinanceFuturesCoinFetcher::new(5);
     assert!(
         fetcher.base_url().contains("dapi.binance.com"),
         "COIN-margined should use DAPI endpoint"
@@ -187,7 +187,7 @@ async fn test_coin_download_integration() {
     use trading_data_downloader::output::csv::CsvBarsWriter;
     use trading_data_downloader::output::{BarsWriter, OutputWriter};
 
-    let fetcher = BinanceFuturesCoinFetcher::new();
+    let fetcher = BinanceFuturesCoinFetcher::new(5);
     let temp_dir = tempfile::TempDir::new().unwrap();
     let output_path = temp_dir.path().join("btcusd_perp_1m.csv");
 

@@ -30,11 +30,15 @@ impl BinanceFuturesCoinFetcher {
     /// Uses global shared HTTP client and rate limiter to ensure:
     /// - Connection pooling across all download operations
     /// - Proper rate limit enforcement across concurrent downloads
-    pub fn new() -> Self {
+    ///
+    /// # Arguments
+    /// * `max_retries` - Maximum number of retry attempts for failed requests
+    pub fn new(max_retries: u32) -> Self {
         let http_client = BinanceHttpClient::new(
             global_http_client(),
             COIN_FUTURES_CONFIG.base_url,
             global_binance_rate_limiter(),
+            max_retries,
         );
 
         Self { http_client }
@@ -44,11 +48,12 @@ impl BinanceFuturesCoinFetcher {
     ///
     /// NOTE: This still uses the global rate limiter to ensure tests don't bypass quotas
     #[allow(dead_code)]
-    pub fn new_with_base_url(base_url: String) -> Self {
+    pub fn new_with_base_url(base_url: String, max_retries: u32) -> Self {
         let http_client = BinanceHttpClient::new(
             global_http_client(),
             base_url,
             global_binance_rate_limiter(),
+            max_retries,
         );
 
         Self { http_client }
@@ -533,10 +538,12 @@ impl Clone for BinanceFuturesCoinFetcher {
     fn clone(&self) -> Self {
         // CRITICAL: Use shared global resources to ensure rate limits are enforced
         // across all clones. Creating new rate limiters would bypass quotas!
+        // Clone uses the same max_retries as the original
         let http_client = BinanceHttpClient::new(
             global_http_client(),
             COIN_FUTURES_CONFIG.base_url,
             global_binance_rate_limiter(),
+            self.http_client.max_retries(),
         );
 
         Self { http_client }
@@ -545,7 +552,8 @@ impl Clone for BinanceFuturesCoinFetcher {
 
 impl Default for BinanceFuturesCoinFetcher {
     fn default() -> Self {
-        Self::new()
+        // Default uses max_retries=5 per FR-002
+        Self::new(5)
     }
 }
 
@@ -668,7 +676,7 @@ mod tests {
 
     #[test]
     fn test_fetcher_initialization() {
-        let fetcher = BinanceFuturesCoinFetcher::new();
+        let fetcher = BinanceFuturesCoinFetcher::new(5);
         assert!(fetcher.base_url().contains("dapi.binance.com"));
     }
 }

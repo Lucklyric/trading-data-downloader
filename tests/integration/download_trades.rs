@@ -79,7 +79,7 @@ async fn test_aggtrades_download_end_to_end() {
     let output_path = temp_dir.path().join("btcusdt_trades.csv");
 
     // Create fetcher
-    let fetcher = BinanceFuturesUsdtFetcher::new();
+    let fetcher = BinanceFuturesUsdtFetcher::new(5);
 
     // Define time window (1 hour)
     let end_time = Utc::now().timestamp_millis();
@@ -212,7 +212,7 @@ async fn test_aggtrades_one_hour_window_chunking() {
     use trading_data_downloader::fetcher::binance_futures_usdt::BinanceFuturesUsdtFetcher;
     use trading_data_downloader::fetcher::DataFetcher;
 
-    let fetcher = BinanceFuturesUsdtFetcher::new();
+    let fetcher = BinanceFuturesUsdtFetcher::new(5);
 
     // Request 2 hours of data - fetcher should chunk this into 2 requests internally
     let end_time = Utc::now().timestamp_millis();
