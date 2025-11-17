@@ -33,6 +33,9 @@ async fn main() {
     // Initialize tracing with enhanced configuration
     init_tracing();
 
+    // Parse CLI arguments
+    let cli = Cli::parse();
+
     // Install global shutdown coordinator and Ctrl+C handler
     let shutdown = ShutdownCoordinator::shared();
     shutdown::set_global_shutdown(shutdown.clone());
@@ -46,27 +49,28 @@ async fn main() {
         }
     });
 
-    // Initialize metrics system (optional, graceful failure)
-    let metrics_addr = std::env::var("METRICS_ADDR").unwrap_or_else(|_| "0.0.0.0:9090".to_string());
+    // Initialize metrics system if --metrics flag is set (FR-004)
+    if cli.metrics {
+        let metrics_addr = std::env::var("METRICS_ADDR").unwrap_or_else(|_| "0.0.0.0:9090".to_string());
 
-    if let Ok(addr) = metrics_addr.parse::<SocketAddr>() {
-        if let Err(e) = metrics::init_metrics(addr).await {
-            tracing::warn!(
-                "Failed to initialize metrics: {}. Continuing without metrics.",
-                e
-            );
+        if let Ok(addr) = metrics_addr.parse::<SocketAddr>() {
+            if let Err(e) = metrics::init_metrics(addr).await {
+                tracing::warn!(
+                    "Failed to initialize metrics: {}. Continuing without metrics.",
+                    e
+                );
+            } else {
+                tracing::info!("Metrics server listening on {}", addr);
+            }
         } else {
-            tracing::info!("Metrics server listening on {}", addr);
+            tracing::warn!(
+                "Invalid metrics address: {}. Metrics disabled.",
+                metrics_addr
+            );
         }
     } else {
-        tracing::debug!(
-            "Invalid metrics address: {}. Metrics disabled.",
-            metrics_addr
-        );
+        tracing::debug!("Metrics disabled (use --metrics to enable)");
     }
-
-    // Parse CLI arguments
-    let cli = Cli::parse();
 
     // Execute command
     let result = match cli.command {
