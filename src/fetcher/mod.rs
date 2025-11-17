@@ -32,7 +32,7 @@
 //!
 //! # fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let id = ExchangeIdentifier::parse("BINANCE:BTC/USDT:USDT")?;
-//! let fetcher = create_fetcher(&id)?;
+//! let fetcher = create_fetcher(&id, 5)?; // 5 retry attempts
 //! // fetcher is BinanceFuturesUsdtFetcher
 //! # Ok(())
 //! # }

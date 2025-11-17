@@ -210,7 +210,7 @@ impl BinanceHttpClient {
                     "Server error {} on attempt {}/{}",
                     status,
                     attempt + 1,
-                    self.max_retries + 1
+                    self.max_retries
                 );
                 request_metrics.record_complete(status.as_u16());
                 let error_text = format!("Server error: {status}");
