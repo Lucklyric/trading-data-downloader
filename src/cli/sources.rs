@@ -1,5 +1,6 @@
 //! CLI command for listing available data sources (T101-T103)
 
+use crate::fetcher::binance_futures_coin::BinanceFuturesCoinFetcher;
 use crate::fetcher::binance_futures_usdt::BinanceFuturesUsdtFetcher;
 use crate::fetcher::DataFetcher;
 use crate::registry::IdentifierRegistry;
@@ -69,7 +70,8 @@ impl SourcesCommand {
             // Only BINANCE is currently supported
             if identifier_str.starts_with("BINANCE:") {
                 // Determine if USDT-margined or COIN-margined
-                if identifier_str.contains(":USDT") {
+                if identifier_str.contains(":USDT") || identifier_str.contains(":BUSD") {
+                    // USDT-margined (or BUSD-margined, same API)
                     let fetcher = BinanceFuturesUsdtFetcher::new(max_retries);
                     match fetcher.list_symbols().await {
                         Ok(symbols) => {
@@ -92,8 +94,31 @@ impl SourcesCommand {
                             eprintln!("Error fetching symbols for {identifier_str}: {e}");
                         }
                     }
+                } else if identifier_str.contains(":BTC") || identifier_str.contains(":ETH") || identifier_str.contains(":USD") {
+                    // COIN-margined (BTC, ETH, or USD settlement)
+                    let fetcher = BinanceFuturesCoinFetcher::new(max_retries);
+                    match fetcher.list_symbols().await {
+                        Ok(symbols) => {
+                            for symbol in symbols {
+                                all_results.push(json!({
+                                    "identifier": identifier_str,
+                                    "symbol": symbol.symbol,
+                                    "pair": symbol.pair,
+                                    "contract_type": symbol.contract_type.to_string(),
+                                    "status": symbol.status.to_string(),
+                                    "base_asset": symbol.base_asset,
+                                    "quote_asset": symbol.quote_asset,
+                                    "margin_asset": symbol.margin_asset,
+                                    "tick_size": symbol.tick_size.to_string(),
+                                    "step_size": symbol.step_size.to_string(),
+                                }));
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error fetching symbols for {identifier_str}: {e}");
+                        }
+                    }
                 }
-                // TODO: Add COIN-margined support in Phase 7
             }
         }
 
