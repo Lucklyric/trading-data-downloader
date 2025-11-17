@@ -68,9 +68,9 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "1")]
     pub concurrency: usize,
 
-    /// Maximum number of retries for failed requests (default: 5)
-    #[arg(long, global = true, default_value = "5")]
-    pub max_retries: usize,
+    /// Maximum number of retries for failed requests (default: 5, range: 1-20)
+    #[arg(long, global = true, default_value = "5", value_parser = clap::value_parser!(u32).range(1..=20))]
+    pub max_retries: u32,
 
     /// Force re-download even if output file already covers the requested range
     #[arg(long, global = true, default_value_t = false)]
@@ -424,7 +424,7 @@ impl BarsArgs {
 
         // Apply CLI flags to executor (P0-6 fix)
         let executor = executor
-            .with_max_retries(cli.max_retries as u32)
+            .with_max_retries(cli.max_retries)
             .with_force(cli.force)
             .with_shutdown(shutdown);
 
@@ -553,7 +553,7 @@ impl AggTradesArgs {
 
         // Apply CLI flags to executor (P0-6 fix)
         let executor = executor
-            .with_max_retries(cli.max_retries as u32)
+            .with_max_retries(cli.max_retries)
             .with_force(cli.force)
             .with_shutdown(shutdown);
 
@@ -842,7 +842,7 @@ impl FundingArgs {
 
         // Apply CLI flags to executor (P0-6 fix)
         let executor = executor
-            .with_max_retries(cli.max_retries as u32)
+            .with_max_retries(cli.max_retries)
             .with_force(cli.force)
             .with_shutdown(shutdown);
 

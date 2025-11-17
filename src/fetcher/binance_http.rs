@@ -111,7 +111,7 @@ impl BinanceHttpClient {
         let endpoint = url.strip_prefix(&self.base_url).unwrap_or(url);
         let symbol = extract_symbol_from_params(params);
         let date_range = extract_time_range_from_params(params);
-        let max_attempts = (self.max_retries + 1) as usize;
+        let max_attempts = self.max_retries as usize;
 
         'attempts: for attempt in 0..=self.max_retries {
             if self.shutdown_requested() {
@@ -128,7 +128,7 @@ impl BinanceHttpClient {
                     warn!(
                         "Network error on attempt {}/{}: {}",
                         attempt + 1,
-                        self.max_retries + 1,
+                        self.max_retries,
                         e
                     );
                     request_metrics.record_network_error();
@@ -171,7 +171,7 @@ impl BinanceHttpClient {
                 warn!(
                     "Rate limit error (429) on attempt {}/{}",
                     attempt + 1,
-                    self.max_retries + 1
+                    self.max_retries
                 );
                 request_metrics.record_complete(429);
                 last_error = Some(FetcherError::RateLimitExceeded);

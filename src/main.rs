@@ -87,7 +87,7 @@ async fn main() {
                 .map_err(|e| anyhow::anyhow!(e)),
         },
         Commands::Sources(ref sources_cmd) => {
-            sources_cmd.execute().await.map_err(|e| anyhow::anyhow!(e))
+            sources_cmd.execute(cli.max_retries).await.map_err(|e| anyhow::anyhow!(e))
         }
         Commands::Validate(ref validate_cmd) => {
             validate_cmd.execute().await.map_err(|e| anyhow::anyhow!(e))

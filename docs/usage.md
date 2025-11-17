@@ -46,7 +46,7 @@ Commands:
 --resume <MODE>              Resume mode: on, off, reset, verify (default: off)
 --resume-dir <DIR>           Custom resume state directory
 --concurrency <N>            Number of concurrent downloads (default: 1)
---max-retries <N>            Maximum retry attempts (default: 3)
+--max-retries <N>            Maximum retry attempts (default: 5)
 --force                      Force re-download existing data
 ```
 

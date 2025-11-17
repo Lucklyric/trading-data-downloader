@@ -39,16 +39,16 @@ enum OutputFormat {
 
 impl SourcesCommand {
     /// Execute the sources command (T102)
-    pub async fn execute(&self) -> Result<()> {
+    pub async fn execute(&self, max_retries: u32) -> Result<()> {
         match &self.action {
             SourcesAction::List { pattern, format } => {
-                self.execute_list(pattern.as_deref(), format).await
+                self.execute_list(pattern.as_deref(), format, max_retries).await
             }
         }
     }
 
     /// Execute the list subcommand (T102, T103)
-    async fn execute_list(&self, pattern: Option<&str>, format: &OutputFormat) -> Result<()> {
+    async fn execute_list(&self, pattern: Option<&str>, format: &OutputFormat, max_retries: u32) -> Result<()> {
         // Load registry
         let registry = IdentifierRegistry::load_embedded()?;
 
@@ -70,7 +70,7 @@ impl SourcesCommand {
             if identifier_str.starts_with("BINANCE:") {
                 // Determine if USDT-margined or COIN-margined
                 if identifier_str.contains(":USDT") {
-                    let fetcher = BinanceFuturesUsdtFetcher::new(5); // Use default max_retries
+                    let fetcher = BinanceFuturesUsdtFetcher::new(max_retries);
                     match fetcher.list_symbols().await {
                         Ok(symbols) => {
                             for symbol in symbols {

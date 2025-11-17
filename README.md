@@ -53,7 +53,7 @@ List available symbols:
 ## Key Options
 
 - `--resume on` - Enable automatic resume for interrupted downloads
-- `--max-retries N` - Set maximum retry attempts (default: 3)
+- `--max-retries N` - Set maximum retry attempts (default: 5)
 - `--force` - Re-download even if data already exists
 - `--concurrency N` - Download multiple symbols concurrently
 - `--output FILE` - Specify output file path
