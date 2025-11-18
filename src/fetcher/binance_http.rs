@@ -15,7 +15,6 @@ use crate::downloader::config::calculate_backoff;
 use crate::downloader::rate_limit::RateLimiter;
 use crate::fetcher::retry_formatter::{extract_error_type, RetryContext, RetryErrorType};
 use crate::fetcher::{FetcherError, FetcherResult};
-use crate::metrics::{record_api_weight, record_retry_backoff, HttpRequestMetrics};
 use crate::shutdown::{self, SharedShutdown};
 
 /// Unified HTTP client for all Binance API interactions (T198)
@@ -107,7 +106,7 @@ impl BinanceHttpClient {
         let mut last_error = None;
         let mut last_error_type: Option<RetryErrorType> = None;
 
-        // Extract endpoint for metrics (remove base URL)
+        // Extract endpoint for logging (remove base URL)
         let endpoint = url.strip_prefix(&self.base_url).unwrap_or(url);
         let symbol = extract_symbol_from_params(params);
         let date_range = extract_time_range_from_params(params);
@@ -119,8 +118,6 @@ impl BinanceHttpClient {
                 last_error = Some(FetcherError::NetworkError("Shutdown requested".to_string()));
                 break;
             }
-            // Start metrics collection for this request
-            let request_metrics = HttpRequestMetrics::start(endpoint, attempt).await;
 
             // Execute the HTTP request
             let response = match self.client.get(url).query(params).send().await {
@@ -132,7 +129,6 @@ impl BinanceHttpClient {
                         self.max_retries,
                         e
                     );
-                    request_metrics.record_network_error();
                     let error_text = e.to_string();
                     last_error = Some(FetcherError::NetworkError(error_text.clone()));
                     let error_type = extract_error_type(None, Some(&e));
@@ -142,7 +138,6 @@ impl BinanceHttpClient {
                     if attempt < self.max_retries {
                         let backoff = calculate_backoff(attempt);
                         debug!("Retrying after {:?}", backoff);
-                        record_retry_backoff(backoff, attempt);
                         let ctx = RetryContext::new(
                             (attempt + 1) as usize,
                             max_attempts,
@@ -174,7 +169,6 @@ impl BinanceHttpClient {
                     attempt + 1,
                     self.max_retries
                 );
-                request_metrics.record_complete(429);
                 last_error = Some(FetcherError::RateLimitExceeded);
                 let error_text = "Rate limit exceeded (429)".to_string();
                 let error_type = extract_error_type(Some(status), None);
@@ -183,7 +177,6 @@ impl BinanceHttpClient {
                 if attempt < self.max_retries {
                     let backoff = calculate_backoff(attempt);
                     debug!("Retrying after {:?}", backoff);
-                    record_retry_backoff(backoff, attempt);
                     let ctx = RetryContext::new(
                         (attempt + 1) as usize,
                         max_attempts,
@@ -213,7 +206,6 @@ impl BinanceHttpClient {
                     attempt + 1,
                     self.max_retries
                 );
-                request_metrics.record_complete(status.as_u16());
                 let error_text = format!("Server error: {status}");
                 last_error = Some(FetcherError::HttpError(error_text.clone()));
                 let error_type = extract_error_type(Some(status), None);
@@ -222,7 +214,6 @@ impl BinanceHttpClient {
                 if attempt < self.max_retries {
                     let backoff = calculate_backoff(attempt);
                     debug!("Retrying after {:?}", backoff);
-                    record_retry_backoff(backoff, attempt);
                     let ctx = RetryContext::new(
                         (attempt + 1) as usize,
                         max_attempts,
@@ -246,7 +237,6 @@ impl BinanceHttpClient {
 
             // Don't retry on client errors (4xx, except 429)
             if status.is_client_error() {
-                request_metrics.record_complete(status.as_u16());
                 let error_text = response
                     .text()
                     .await
@@ -269,21 +259,16 @@ impl BinanceHttpClient {
             let headers = response.headers().clone();
             if let Some(weight) = self.parse_weight_header(&headers) {
                 debug!("Response weight: {}", weight);
-                // Update metrics with actual weight consumed
-                // Binance weight limit is 2400 per minute for futures
-                record_api_weight(weight, 2400);
             }
 
             // Success - deserialize response
             match response.json::<T>().await {
                 Ok(data) => {
                     debug!("Request succeeded on attempt {}", attempt + 1);
-                    request_metrics.record_complete(status.as_u16());
                     log_retry_success(attempt, max_attempts, &symbol, date_range, endpoint);
                     return Ok(data);
                 }
                 Err(e) => {
-                    request_metrics.record_complete(status.as_u16());
                     return Err(FetcherError::ParseError(format!(
                         "Failed to deserialize response: {e}"
                     )));
