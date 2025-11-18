@@ -355,22 +355,50 @@ impl BarsArgs {
         Ok(datetime.and_utc().timestamp_millis())
     }
 
-    /// Get output path or generate default
-    fn get_output_path(&self) -> PathBuf {
-        self.output.clone().unwrap_or_else(|| {
-            PathBuf::from(format!(
-                "{}_{}.csv",
-                self.symbol.to_lowercase(),
-                self.interval
-            ))
-        })
+    /// Get output path or generate hierarchical path
+    fn get_output_path(&self, _cli: &Cli) -> Result<PathBuf, CliError> {
+        // Backward compatibility: If --output specified, use it exactly
+        if let Some(output) = &self.output {
+            return Ok(output.clone());
+        }
+
+        // Use hierarchical structure: data/{venue}/{symbol}/
+        use crate::output::{DataType, OutputPathBuilder};
+        use crate::Interval;
+
+        let root = PathBuf::from("data"); // Phase 4 will add cli.data_dir support
+
+        let interval = Interval::from_str(&self.interval)
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
+
+        let start_time = self.parse_start_time()?;
+
+        let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
+            .with_data_type(DataType::Bars)
+            .with_interval(interval)
+            .with_month_from_timestamp(start_time);
+
+        builder
+            .build()
+            .map_err(|e| CliError::InvalidArgument(format!("Failed to build output path: {e}")))
     }
 
     /// Execute bars download (T086-T087)
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
-        let output_path = self.get_output_path();
+        let output_path = self.get_output_path(cli)?;
+
+        // Ensure directories exist when using hierarchical structure
+        if self.output.is_none() {
+            use crate::output::{DataType, OutputPathBuilder};
+            let root = PathBuf::from("data");
+            let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
+                .with_data_type(DataType::Bars);
+            builder.ensure_directories().map_err(|e| {
+                CliError::InvalidArgument(format!("Failed to create directories: {e}"))
+            })?;
+        }
 
         let interval = Interval::from_str(&self.interval)
             .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
@@ -492,18 +520,44 @@ impl AggTradesArgs {
         Ok(datetime.and_utc().timestamp_millis())
     }
 
-    /// Get output path or generate default
-    fn get_output_path(&self) -> PathBuf {
-        self.output
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(format!("{}_trades.csv", self.symbol.to_lowercase())))
+    /// Get output path or generate hierarchical path
+    fn get_output_path(&self, _cli: &Cli) -> Result<PathBuf, CliError> {
+        // Backward compatibility: If --output specified, use it exactly
+        if let Some(output) = &self.output {
+            return Ok(output.clone());
+        }
+
+        // Use hierarchical structure: data/{venue}/{symbol}/
+        use crate::output::{DataType, OutputPathBuilder};
+
+        let root = PathBuf::from("data"); // Phase 4 will add cli.data_dir support
+        let start_time = self.parse_start_time()?;
+
+        let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
+            .with_data_type(DataType::AggTrades)
+            .with_month_from_timestamp(start_time);
+
+        builder
+            .build()
+            .map_err(|e| CliError::InvalidArgument(format!("Failed to build output path: {e}")))
     }
 
     /// Execute aggTrades download (T129)
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
-        let output_path = self.get_output_path();
+        let output_path = self.get_output_path(cli)?;
+
+        // Ensure directories exist when using hierarchical structure
+        if self.output.is_none() {
+            use crate::output::{DataType, OutputPathBuilder};
+            let root = PathBuf::from("data");
+            let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
+                .with_data_type(DataType::AggTrades);
+            builder.ensure_directories().map_err(|e| {
+                CliError::InvalidArgument(format!("Failed to create directories: {e}"))
+            })?;
+        }
 
         // Create download job
         let job = DownloadJob::new_aggtrades(
@@ -781,18 +835,44 @@ impl FundingArgs {
         Ok(datetime.and_utc().timestamp_millis())
     }
 
-    /// Get output path or generate default
-    fn get_output_path(&self) -> PathBuf {
-        self.output
-            .clone()
-            .unwrap_or_else(|| PathBuf::from(format!("{}_funding.csv", self.symbol.to_lowercase())))
+    /// Get output path or generate hierarchical path
+    fn get_output_path(&self, _cli: &Cli) -> Result<PathBuf, CliError> {
+        // Backward compatibility: If --output specified, use it exactly
+        if let Some(output) = &self.output {
+            return Ok(output.clone());
+        }
+
+        // Use hierarchical structure: data/{venue}/{symbol}/
+        use crate::output::{DataType, OutputPathBuilder};
+
+        let root = PathBuf::from("data"); // Phase 4 will add cli.data_dir support
+        let start_time = self.parse_start_time()?;
+
+        let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
+            .with_data_type(DataType::Funding)
+            .with_month_from_timestamp(start_time);
+
+        builder
+            .build()
+            .map_err(|e| CliError::InvalidArgument(format!("Failed to build output path: {e}")))
     }
 
     /// Execute funding rates download (T151)
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
-        let output_path = self.get_output_path();
+        let output_path = self.get_output_path(cli)?;
+
+        // Ensure directories exist when using hierarchical structure
+        if self.output.is_none() {
+            use crate::output::{DataType, OutputPathBuilder};
+            let root = PathBuf::from("data");
+            let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
+                .with_data_type(DataType::Funding);
+            builder.ensure_directories().map_err(|e| {
+                CliError::InvalidArgument(format!("Failed to create directories: {e}"))
+            })?;
+        }
 
         // Create download job
         let job = DownloadJob::new_funding(
