@@ -62,5 +62,3 @@ fn test_cli_respects_custom_max_retries() {
         "CLI should respect custom --max-retries flag"
     );
 }
-
-

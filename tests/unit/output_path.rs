@@ -30,16 +30,12 @@ fn test_sanitize_venue_replaces_special_chars() {
 
 #[test]
 fn test_extract_venue_usdt_futures() {
-    let builder = OutputPathBuilder::new(
-        PathBuf::from("data"),
-        "BINANCE:BTC/USDT:USDT",
-        "BTCUSDT",
-    )
-    .with_data_type(DataType::AggTrades)
-    .with_month(YearMonth {
-        year: 2024,
-        month: 1,
-    });
+    let builder = OutputPathBuilder::new(PathBuf::from("data"), "BINANCE:BTC/USDT:USDT", "BTCUSDT")
+        .with_data_type(DataType::AggTrades)
+        .with_month(YearMonth {
+            year: 2024,
+            month: 1,
+        });
 
     let path = builder.build().unwrap();
     assert!(path.starts_with("data/binance_futures_usdt"));
@@ -47,16 +43,12 @@ fn test_extract_venue_usdt_futures() {
 
 #[test]
 fn test_extract_venue_coin_futures() {
-    let builder = OutputPathBuilder::new(
-        PathBuf::from("data"),
-        "BINANCE:BTC/BTC:BTC",
-        "BTCBTC",
-    )
-    .with_data_type(DataType::AggTrades)
-    .with_month(YearMonth {
-        year: 2024,
-        month: 1,
-    });
+    let builder = OutputPathBuilder::new(PathBuf::from("data"), "BINANCE:BTC/BTC:BTC", "BTCBTC")
+        .with_data_type(DataType::AggTrades)
+        .with_month(YearMonth {
+            year: 2024,
+            month: 1,
+        });
 
     let path = builder.build().unwrap();
     assert!(path.starts_with("data/binance_futures_coin"));
@@ -79,35 +71,26 @@ fn test_year_month_format() {
 
 #[test]
 fn test_build_path_bars() {
-    let builder = OutputPathBuilder::new(
-        PathBuf::from("data"),
-        "BINANCE:BTC/USDT:USDT",
-        "BTCUSDT",
-    )
-    .with_data_type(DataType::Bars)
-    .with_interval(Interval::from_str("1m").unwrap())
-    .with_month(YearMonth {
-        year: 2024,
-        month: 1,
-    });
+    let builder = OutputPathBuilder::new(PathBuf::from("data"), "BINANCE:BTC/USDT:USDT", "BTCUSDT")
+        .with_data_type(DataType::Bars)
+        .with_interval(Interval::from_str("1m").unwrap())
+        .with_month(YearMonth {
+            year: 2024,
+            month: 1,
+        });
 
-    let expected =
-        PathBuf::from("data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1m-2024-01.csv");
+    let expected = PathBuf::from("data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1m-2024-01.csv");
     assert_eq!(builder.build().unwrap(), expected);
 }
 
 #[test]
 fn test_build_path_aggtrades() {
-    let builder = OutputPathBuilder::new(
-        PathBuf::from("data"),
-        "BINANCE:BTC/USDT:USDT",
-        "BTCUSDT",
-    )
-    .with_data_type(DataType::AggTrades)
-    .with_month(YearMonth {
-        year: 2024,
-        month: 2,
-    });
+    let builder = OutputPathBuilder::new(PathBuf::from("data"), "BINANCE:BTC/USDT:USDT", "BTCUSDT")
+        .with_data_type(DataType::AggTrades)
+        .with_month(YearMonth {
+            year: 2024,
+            month: 2,
+        });
 
     let expected = PathBuf::from("data/binance_futures_usdt/BTCUSDT/BTCUSDT-aggtrades-2024-02.csv");
     assert_eq!(builder.build().unwrap(), expected);
@@ -115,16 +98,12 @@ fn test_build_path_aggtrades() {
 
 #[test]
 fn test_build_path_funding() {
-    let builder = OutputPathBuilder::new(
-        PathBuf::from("data"),
-        "BINANCE:BTC/USDT:USDT",
-        "BTCUSDT",
-    )
-    .with_data_type(DataType::Funding)
-    .with_month(YearMonth {
-        year: 2024,
-        month: 3,
-    });
+    let builder = OutputPathBuilder::new(PathBuf::from("data"), "BINANCE:BTC/USDT:USDT", "BTCUSDT")
+        .with_data_type(DataType::Funding)
+        .with_month(YearMonth {
+            year: 2024,
+            month: 3,
+        });
 
     let expected = PathBuf::from("data/binance_futures_usdt/BTCUSDT/BTCUSDT-funding-2024-03.csv");
     assert_eq!(builder.build().unwrap(), expected);

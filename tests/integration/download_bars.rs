@@ -3,7 +3,6 @@
 //! These tests verify end-to-end functionality for downloading OHLCV bars.
 //! Tests are written first (TDD) and will fail until implementation is complete.
 
-
 // These types will be defined during implementation (T041-T047)
 // Uncomment when implementing:
 // use trading_data_downloader::{Bar, Interval, DownloadJob, JobStatus};

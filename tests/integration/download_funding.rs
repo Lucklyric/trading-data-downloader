@@ -205,7 +205,6 @@ async fn test_download_executor_funding_job() {
 #[test]
 #[ignore] // Requires full CLI integration - run manually with `cargo test --ignored`
 fn test_cli_funding_command() {
-    
     use std::process::Command;
     use tempfile::TempDir;
 

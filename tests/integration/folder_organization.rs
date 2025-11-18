@@ -39,10 +39,7 @@ fn test_hierarchical_structure_default() {
         .success();
 
     // Verify hierarchical structure: data/{venue}/{symbol}/
-    let expected_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("BTCUSDT");
+    let expected_dir = temp_dir.path().join("binance_futures_usdt").join("BTCUSDT");
 
     assert!(
         expected_dir.exists(),
@@ -124,10 +121,7 @@ fn test_symbol_directory_created_automatically() {
         .success();
 
     // Verify symbol directory exists
-    let symbol_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("BTCUSDT");
+    let symbol_dir = temp_dir.path().join("binance_futures_usdt").join("BTCUSDT");
     assert!(
         symbol_dir.exists() && symbol_dir.is_dir(),
         "Symbol directory not created: {}",
@@ -185,14 +179,8 @@ fn test_multiple_symbols_same_venue() {
         .success();
 
     // Verify both symbol directories exist under the same venue
-    let btc_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("BTCUSDT");
-    let eth_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("ETHUSDT");
+    let btc_dir = temp_dir.path().join("binance_futures_usdt").join("BTCUSDT");
+    let eth_dir = temp_dir.path().join("binance_futures_usdt").join("ETHUSDT");
 
     assert!(btc_dir.exists(), "BTCUSDT directory not found");
     assert!(eth_dir.exists(), "ETHUSDT directory not found");
@@ -288,10 +276,7 @@ fn test_filename_bars_includes_interval_and_month() {
         .success();
 
     // Verify filename format: {SYMBOL}-bars-{interval}-{YYYY-MM}.csv
-    let symbol_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("BTCUSDT");
+    let symbol_dir = temp_dir.path().join("binance_futures_usdt").join("BTCUSDT");
 
     let entries: Vec<_> = fs::read_dir(&symbol_dir)
         .unwrap()
@@ -328,10 +313,7 @@ fn test_filename_aggtrades_includes_month() {
         .success();
 
     // Verify filename format: {SYMBOL}-aggtrades-{YYYY-MM}.csv
-    let symbol_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("BTCUSDT");
+    let symbol_dir = temp_dir.path().join("binance_futures_usdt").join("BTCUSDT");
 
     let entries: Vec<_> = fs::read_dir(&symbol_dir)
         .unwrap()
@@ -368,10 +350,7 @@ fn test_filename_funding_includes_month() {
         .success();
 
     // Verify filename format: {SYMBOL}-funding-{YYYY-MM}.csv
-    let symbol_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("BTCUSDT");
+    let symbol_dir = temp_dir.path().join("binance_futures_usdt").join("BTCUSDT");
 
     let entries: Vec<_> = fs::read_dir(&symbol_dir)
         .unwrap()
@@ -411,10 +390,7 @@ fn test_multi_month_creates_separate_files() {
         .success();
 
     // Verify 3 separate files created
-    let symbol_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("BTCUSDT");
+    let symbol_dir = temp_dir.path().join("binance_futures_usdt").join("BTCUSDT");
 
     let mut entries: Vec<_> = fs::read_dir(&symbol_dir)
         .unwrap()
@@ -457,10 +433,7 @@ fn test_same_month_twice_appends_data() {
         .assert()
         .success();
 
-    let symbol_dir = temp_dir
-        .path()
-        .join("binance_futures_usdt")
-        .join("BTCUSDT");
+    let symbol_dir = temp_dir.path().join("binance_futures_usdt").join("BTCUSDT");
     let file_path = symbol_dir.join("BTCUSDT-bars-1d-2024-01.csv");
 
     // Check file exists and get initial size

@@ -132,10 +132,8 @@ async fn test_aggtrades_download_end_to_end() {
 #[tokio::test]
 #[ignore] // Remove when implementation is complete
 async fn test_aggtrades_download_resume() {
-    
     use trading_data_downloader::downloader::executor::DownloadExecutor;
     use trading_data_downloader::downloader::job::DownloadJob;
-    
 
     // Setup temporary directories
     let temp_dir = TempDir::new().expect("Failed to create temp dir");

@@ -43,13 +43,19 @@ impl SourcesCommand {
     pub async fn execute(&self, max_retries: u32) -> Result<()> {
         match &self.action {
             SourcesAction::List { pattern, format } => {
-                self.execute_list(pattern.as_deref(), format, max_retries).await
+                self.execute_list(pattern.as_deref(), format, max_retries)
+                    .await
             }
         }
     }
 
     /// Execute the list subcommand (T102, T103)
-    async fn execute_list(&self, pattern: Option<&str>, format: &OutputFormat, max_retries: u32) -> Result<()> {
+    async fn execute_list(
+        &self,
+        pattern: Option<&str>,
+        format: &OutputFormat,
+        max_retries: u32,
+    ) -> Result<()> {
         // Load registry
         let registry = IdentifierRegistry::load_embedded()?;
 
@@ -94,7 +100,10 @@ impl SourcesCommand {
                             eprintln!("Error fetching symbols for {identifier_str}: {e}");
                         }
                     }
-                } else if identifier_str.contains(":BTC") || identifier_str.contains(":ETH") || identifier_str.contains(":USD") {
+                } else if identifier_str.contains(":BTC")
+                    || identifier_str.contains(":ETH")
+                    || identifier_str.contains(":USD")
+                {
                     // COIN-margined (BTC, ETH, or USD settlement)
                     let fetcher = BinanceFuturesCoinFetcher::new(max_retries);
                     match fetcher.list_symbols().await {

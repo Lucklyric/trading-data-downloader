@@ -421,7 +421,8 @@ mod tests {
     fn test_binance_http_client_creation() {
         let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
+        let http_client =
+            BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
         assert_eq!(http_client.base_url, "https://fapi.binance.com");
     }
@@ -430,7 +431,8 @@ mod tests {
     fn test_parse_weight_header_valid() {
         let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
+        let http_client =
+            BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(
@@ -446,7 +448,8 @@ mod tests {
     fn test_parse_weight_header_missing() {
         let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
+        let http_client =
+            BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
         let headers = reqwest::header::HeaderMap::new();
 
@@ -458,7 +461,8 @@ mod tests {
     fn test_parse_weight_header_invalid() {
         let client = Arc::new(Client::new());
         let rate_limiter = Arc::new(RateLimiter::weight_based(1000, Duration::from_secs(60)));
-        let http_client = BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
+        let http_client =
+            BinanceHttpClient::new(client, "https://fapi.binance.com", rate_limiter, 5);
 
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert(

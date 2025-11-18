@@ -2,11 +2,11 @@
 //!
 //! Tests that verify CLI --max-retries flag is properly wired to HTTP client
 
+use reqwest::Client;
 use std::sync::Arc;
 use std::time::Duration;
-use reqwest::Client;
-use trading_data_downloader::fetcher::binance_http::BinanceHttpClient;
 use trading_data_downloader::downloader::rate_limit::RateLimiter;
+use trading_data_downloader::fetcher::binance_http::BinanceHttpClient;
 
 #[tokio::test]
 async fn test_http_client_respects_custom_max_retries() {

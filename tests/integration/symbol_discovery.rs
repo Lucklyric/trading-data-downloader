@@ -192,7 +192,10 @@ async fn test_coin_margined_symbol_discovery() {
         .expect("Failed to list COIN-margined symbols");
 
     // Verify we get a list of symbols
-    assert!(!symbols.is_empty(), "Should have at least one COIN-margined symbol");
+    assert!(
+        !symbols.is_empty(),
+        "Should have at least one COIN-margined symbol"
+    );
 
     // Verify symbols have required fields
     for symbol in &symbols {

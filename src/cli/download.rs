@@ -359,34 +359,6 @@ impl BarsArgs {
         Ok(datetime.and_utc().timestamp_millis())
     }
 
-    /// Get output path or generate hierarchical path
-    fn get_output_path(&self, cli: &Cli) -> Result<PathBuf, CliError> {
-        // Backward compatibility: If --output specified, use it exactly
-        if let Some(output) = &self.output {
-            return Ok(output.clone());
-        }
-
-        // Use hierarchical structure: data/{venue}/{symbol}/
-        use crate::output::{DataType, OutputPathBuilder};
-        use crate::Interval;
-
-        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
-
-        let interval = Interval::from_str(&self.interval)
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
-
-        let start_time = self.parse_start_time()?;
-
-        let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
-            .with_data_type(DataType::Bars)
-            .with_interval(interval)
-            .with_month_from_timestamp(start_time);
-
-        builder
-            .build()
-            .map_err(|e| CliError::InvalidArgument(format!("Failed to build output path: {e}")))
-    }
-
     /// Execute bars download (T086-T087)
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
@@ -411,14 +383,17 @@ impl BarsArgs {
         // US3: Multi-month splitting for hierarchical structure
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
 
-        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
+        let root = cli
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("data"));
 
         // Ensure base directories exist
         let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
             .with_data_type(DataType::Bars);
-        builder.ensure_directories().map_err(|e| {
-            CliError::InvalidArgument(format!("Failed to create directories: {e}"))
-        })?;
+        builder
+            .ensure_directories()
+            .map_err(|e| CliError::InvalidArgument(format!("Failed to create directories: {e}")))?;
 
         // Split time range into monthly chunks
         let month_ranges = split_into_month_ranges(start_time, end_time);
@@ -531,10 +506,7 @@ impl BarsArgs {
         // Execute download
         info!(
             "Starting download: {} {} from {} to {}",
-            self.symbol,
-            interval,
-            start_time,
-            end_time
+            self.symbol, interval, start_time, end_time
         );
 
         let result = executor.execute_bars_job(job.clone()).await;
@@ -592,28 +564,6 @@ impl AggTradesArgs {
         Ok(datetime.and_utc().timestamp_millis())
     }
 
-    /// Get output path or generate hierarchical path
-    fn get_output_path(&self, cli: &Cli) -> Result<PathBuf, CliError> {
-        // Backward compatibility: If --output specified, use it exactly
-        if let Some(output) = &self.output {
-            return Ok(output.clone());
-        }
-
-        // Use hierarchical structure: data/{venue}/{symbol}/
-        use crate::output::{DataType, OutputPathBuilder};
-
-        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
-        let start_time = self.parse_start_time()?;
-
-        let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
-            .with_data_type(DataType::AggTrades)
-            .with_month_from_timestamp(start_time);
-
-        builder
-            .build()
-            .map_err(|e| CliError::InvalidArgument(format!("Failed to build output path: {e}")))
-    }
-
     /// Execute aggTrades download (T129)
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
@@ -629,14 +579,17 @@ impl AggTradesArgs {
         // US3: Multi-month splitting for hierarchical structure
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
 
-        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
+        let root = cli
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("data"));
 
         // Ensure base directories exist
         let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
             .with_data_type(DataType::AggTrades);
-        builder.ensure_directories().map_err(|e| {
-            CliError::InvalidArgument(format!("Failed to create directories: {e}"))
-        })?;
+        builder
+            .ensure_directories()
+            .map_err(|e| CliError::InvalidArgument(format!("Failed to create directories: {e}")))?;
 
         // Split time range into monthly chunks
         let month_ranges = split_into_month_ranges(start_time, end_time);
@@ -962,28 +915,6 @@ impl FundingArgs {
         Ok(datetime.and_utc().timestamp_millis())
     }
 
-    /// Get output path or generate hierarchical path
-    fn get_output_path(&self, cli: &Cli) -> Result<PathBuf, CliError> {
-        // Backward compatibility: If --output specified, use it exactly
-        if let Some(output) = &self.output {
-            return Ok(output.clone());
-        }
-
-        // Use hierarchical structure: data/{venue}/{symbol}/
-        use crate::output::{DataType, OutputPathBuilder};
-
-        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
-        let start_time = self.parse_start_time()?;
-
-        let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
-            .with_data_type(DataType::Funding)
-            .with_month_from_timestamp(start_time);
-
-        builder
-            .build()
-            .map_err(|e| CliError::InvalidArgument(format!("Failed to build output path: {e}")))
-    }
-
     /// Execute funding rates download (T151)
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
@@ -999,14 +930,17 @@ impl FundingArgs {
         // US3: Multi-month splitting for hierarchical structure
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
 
-        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
+        let root = cli
+            .data_dir
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("data"));
 
         // Ensure base directories exist
         let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
             .with_data_type(DataType::Funding);
-        builder.ensure_directories().map_err(|e| {
-            CliError::InvalidArgument(format!("Failed to create directories: {e}"))
-        })?;
+        builder
+            .ensure_directories()
+            .map_err(|e| CliError::InvalidArgument(format!("Failed to create directories: {e}")))?;
 
         // Split time range into monthly chunks
         let month_ranges = split_into_month_ranges(start_time, end_time);
