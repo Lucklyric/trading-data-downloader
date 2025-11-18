@@ -65,6 +65,9 @@
 
 use crate::{AggTrade, Bar, FundingRate};
 pub mod csv;
+mod path;
+
+pub use path::{split_into_month_ranges, DataType, MonthRange, OutputPathBuilder, YearMonth};
 
 /// Output writer errors (T034)
 #[derive(Debug, thiserror::Error)]

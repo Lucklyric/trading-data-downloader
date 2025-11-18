@@ -26,5 +26,6 @@ mod unit {
     pub mod binance_parser;
     pub mod download_cli;
     pub mod fetcher_factory;
+    pub mod output_path;
     pub mod pagination;
 }
