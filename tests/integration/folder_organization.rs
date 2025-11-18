@@ -508,7 +508,6 @@ fn test_same_month_twice_appends_data() {
 
 /// Test backward compatibility: --output flag should bypass hierarchical structure
 #[test]
-#[ignore = "requires implementation - will be enabled in US4"]
 fn test_backward_compatibility_output_flag() {
     let temp_dir = TempDir::new().unwrap();
     let custom_path = temp_dir.path().join("my_custom_file.csv");
