@@ -2,7 +2,6 @@
 //!
 //! Implements weight-based and request-based rate limiting with 429 response handling
 
-use crate::metrics::RateLimiterMetrics;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Semaphore;
@@ -69,14 +68,6 @@ impl RateLimiter {
     /// Previously, permits were dropped immediately (RAII) then add_permits()
     /// was called, causing double-restoration and permit leakage.
     pub async fn acquire(&self, weight: usize) -> Result<(), RateLimitError> {
-        // Start metrics tracking
-        let mut metrics = RateLimiterMetrics::new();
-        metrics.start_acquire();
-
-        // Record available permits before acquisition
-        let available = self.semaphore.available_permits() as u32;
-        metrics.update_available_permits(available);
-
         // Acquire owned semaphore permits (not dropped at function end)
         let permit = self
             .semaphore
@@ -84,13 +75,6 @@ impl RateLimiter {
             .acquire_many_owned(weight as u32)
             .await
             .map_err(|e| RateLimitError::AcquireError(e.to_string()))?;
-
-        // Record successful acquisition
-        metrics.record_acquired(weight as u32);
-
-        // Update available permits after acquisition
-        let available_after = self.semaphore.available_permits() as u32;
-        metrics.update_available_permits(available_after);
 
         // Hold permit for window duration, then drop (auto-releases)
         let window = self.window;

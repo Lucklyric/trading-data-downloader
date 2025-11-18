@@ -1,11 +1,9 @@
 //! Main entry point for trading-data-downloader CLI (T088, T167)
 
 use clap::Parser;
-use std::net::SocketAddr;
 use tracing::error;
 use tracing_subscriber::EnvFilter;
 use trading_data_downloader::cli::{Cli, Commands};
-use trading_data_downloader::metrics;
 use trading_data_downloader::shutdown::{self, ShutdownCoordinator};
 
 /// Initialize tracing subscriber with optional JSON formatting (T167)
@@ -48,29 +46,6 @@ async fn main() {
             }
         }
     });
-
-    // Initialize metrics system if --metrics flag is set (FR-004)
-    if cli.metrics {
-        let metrics_addr = std::env::var("METRICS_ADDR").unwrap_or_else(|_| "0.0.0.0:9090".to_string());
-
-        if let Ok(addr) = metrics_addr.parse::<SocketAddr>() {
-            if let Err(e) = metrics::init_metrics(addr).await {
-                tracing::warn!(
-                    "Failed to initialize metrics: {}. Continuing without metrics.",
-                    e
-                );
-            } else {
-                tracing::info!("Metrics server listening on {}", addr);
-            }
-        } else {
-            tracing::warn!(
-                "Invalid metrics address: {}. Metrics disabled.",
-                metrics_addr
-            );
-        }
-    } else {
-        tracing::debug!("Metrics disabled (use --metrics to enable)");
-    }
 
     // Execute command
     let result = match cli.command {

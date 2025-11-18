@@ -95,9 +95,6 @@ pub mod registry;
 /// Resume capability for download jobs
 pub mod resume;
 
-/// Production observability metrics
-pub mod metrics;
-
 /// Graceful shutdown coordination shared across modules
 pub mod shutdown;
 

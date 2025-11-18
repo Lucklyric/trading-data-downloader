@@ -9,7 +9,6 @@ use crate::downloader::progress::{DownloadItemType, ProgressState, ProgressTrack
 use crate::downloader::{DownloadError, DownloadJob, JobProgress, JobStatus};
 use crate::fetcher::{create_fetcher, DataFetcher};
 use crate::identifier::ExchangeIdentifier;
-use crate::metrics::DownloadMetrics;
 use crate::output::csv::{read_time_range, CsvAggTradesWriter, CsvBarsWriter, CsvFundingWriter};
 use crate::output::{AggTradesWriter, BarsWriter, FundingWriter, OutputWriter};
 use crate::resume::checkpoint::{Checkpoint, CheckpointType};
@@ -363,9 +362,6 @@ impl DownloadExecutor {
 
         info!("Starting bars download job");
 
-        // Start metrics tracking for this download
-        let download_metrics = DownloadMetrics::start("bars", &job.symbol);
-
         // Validate job
         job.validate().map_err(DownloadError::ValidationError)?;
 
@@ -456,15 +452,6 @@ impl DownloadExecutor {
 
         if job.status == JobStatus::Completed {
             self.cleanup_resume_state(&job);
-            // Record successful download in metrics
-            download_metrics.record_success(job.progress.downloaded_bars);
-        } else {
-            // Record failure in metrics
-            let error_msg = match &result {
-                Err(e) => e.to_string(),
-                Ok(_) => "Unknown error".to_string(),
-            };
-            download_metrics.record_failure(&error_msg);
         }
 
         info!(
@@ -492,9 +479,6 @@ impl DownloadExecutor {
         let _enter = span.enter();
 
         info!("Starting aggTrades download job");
-
-        // Start metrics tracking for this download
-        let download_metrics = DownloadMetrics::start("aggtrades", &job.symbol);
 
         // Validate job
         job.validate().map_err(DownloadError::ValidationError)?;
@@ -565,15 +549,6 @@ impl DownloadExecutor {
 
         if job.status == JobStatus::Completed {
             self.cleanup_resume_state(&job);
-            // Record successful download in metrics
-            download_metrics.record_success(job.progress.downloaded_bars);
-        } else {
-            // Record failure in metrics
-            let error_msg = match &result {
-                Err(e) => e.to_string(),
-                Ok(_) => "Unknown error".to_string(),
-            };
-            download_metrics.record_failure(&error_msg);
         }
 
         info!(
@@ -601,9 +576,6 @@ impl DownloadExecutor {
         let _enter = span.enter();
 
         info!("Starting funding rates download job");
-
-        // Start metrics tracking for this download
-        let download_metrics = DownloadMetrics::start("funding", &job.symbol);
 
         // Validate job
         job.validate().map_err(DownloadError::ValidationError)?;
@@ -674,15 +646,6 @@ impl DownloadExecutor {
 
         if job.status == JobStatus::Completed {
             self.cleanup_resume_state(&job);
-            // Record successful download in metrics
-            download_metrics.record_success(job.progress.downloaded_bars);
-        } else {
-            // Record failure in metrics
-            let error_msg = match &result {
-                Err(e) => e.to_string(),
-                Ok(_) => "Unknown error".to_string(),
-            };
-            download_metrics.record_failure(&error_msg);
         }
 
         info!(

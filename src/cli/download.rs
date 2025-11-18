@@ -75,10 +75,6 @@ pub struct Cli {
     /// Force re-download even if output file already covers the requested range
     #[arg(long, global = true, default_value_t = false)]
     pub force: bool,
-
-    /// Enable Prometheus metrics server on localhost:9090
-    #[arg(long, global = true, default_value_t = false)]
-    pub metrics: bool,
 }
 
 /// CLI commands
