@@ -10,6 +10,7 @@ mod integration {
     pub mod download_bars_archive;
     pub mod download_funding;
     pub mod download_trades;
+    pub mod folder_organization;
     pub mod identifier_validation;
     pub mod logging;
     pub mod progress;
