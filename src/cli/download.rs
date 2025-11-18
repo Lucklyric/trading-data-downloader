@@ -391,22 +391,87 @@ impl BarsArgs {
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
-        let output_path = self.get_output_path(cli)?;
-
-        // Ensure directories exist when using hierarchical structure
-        if self.output.is_none() {
-            use crate::output::{DataType, OutputPathBuilder};
-            let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
-            let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
-                .with_data_type(DataType::Bars);
-            builder.ensure_directories().map_err(|e| {
-                CliError::InvalidArgument(format!("Failed to create directories: {e}"))
-            })?;
-        }
-
         let interval = Interval::from_str(&self.interval)
             .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
 
+        // T067a: Backward compatibility - if --output is specified, skip month splitting
+        if let Some(output_path) = &self.output {
+            return self
+                .execute_single_job(
+                    cli,
+                    shutdown,
+                    interval,
+                    start_time,
+                    end_time,
+                    output_path.clone(),
+                )
+                .await;
+        }
+
+        // US3: Multi-month splitting for hierarchical structure
+        use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
+
+        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
+
+        // Ensure base directories exist
+        let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+            .with_data_type(DataType::Bars);
+        builder.ensure_directories().map_err(|e| {
+            CliError::InvalidArgument(format!("Failed to create directories: {e}"))
+        })?;
+
+        // Split time range into monthly chunks
+        let month_ranges = split_into_month_ranges(start_time, end_time);
+
+        info!(
+            "Downloading {} months of data: {} {} from {} to {}",
+            month_ranges.len(),
+            self.symbol,
+            self.interval,
+            self.start_time,
+            self.end_time
+        );
+
+        // Execute a job for each month
+        for month_range in month_ranges {
+            let path_builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+                .with_data_type(DataType::Bars)
+                .with_interval(interval)
+                .with_month(month_range.month);
+
+            let output_path = path_builder.build().map_err(|e| {
+                CliError::InvalidArgument(format!("Failed to build output path: {e}"))
+            })?;
+
+            info!(
+                "Processing month {}: {} to {}",
+                month_range.month, month_range.start_ms, month_range.end_ms
+            );
+
+            self.execute_single_job(
+                cli,
+                shutdown.clone(),
+                interval,
+                month_range.start_ms,
+                month_range.end_ms,
+                output_path,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Execute a single download job
+    async fn execute_single_job(
+        &self,
+        cli: &Cli,
+        shutdown: SharedShutdown,
+        interval: crate::Interval,
+        start_time: i64,
+        end_time: i64,
+        output_path: PathBuf,
+    ) -> Result<(), CliError> {
         // Create download job
         let job = DownloadJob::new(
             self.identifier.clone(),
@@ -466,7 +531,10 @@ impl BarsArgs {
         // Execute download
         info!(
             "Starting download: {} {} from {} to {}",
-            self.symbol, self.interval, self.start_time, self.end_time
+            self.symbol,
+            interval,
+            start_time,
+            end_time
         );
 
         let result = executor.execute_bars_job(job.clone()).await;
@@ -550,19 +618,74 @@ impl AggTradesArgs {
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
-        let output_path = self.get_output_path(cli)?;
 
-        // Ensure directories exist when using hierarchical structure
-        if self.output.is_none() {
-            use crate::output::{DataType, OutputPathBuilder};
-            let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
-            let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
-                .with_data_type(DataType::AggTrades);
-            builder.ensure_directories().map_err(|e| {
-                CliError::InvalidArgument(format!("Failed to create directories: {e}"))
-            })?;
+        // T067a: Backward compatibility - if --output is specified, skip month splitting
+        if let Some(output_path) = &self.output {
+            return self
+                .execute_single_job(cli, shutdown, start_time, end_time, output_path.clone())
+                .await;
         }
 
+        // US3: Multi-month splitting for hierarchical structure
+        use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
+
+        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
+
+        // Ensure base directories exist
+        let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+            .with_data_type(DataType::AggTrades);
+        builder.ensure_directories().map_err(|e| {
+            CliError::InvalidArgument(format!("Failed to create directories: {e}"))
+        })?;
+
+        // Split time range into monthly chunks
+        let month_ranges = split_into_month_ranges(start_time, end_time);
+
+        info!(
+            "Downloading {} months of aggTrades data: {} from {} to {}",
+            month_ranges.len(),
+            self.symbol,
+            self.start_time,
+            self.end_time
+        );
+
+        // Execute a job for each month
+        for month_range in month_ranges {
+            let path_builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+                .with_data_type(DataType::AggTrades)
+                .with_month(month_range.month);
+
+            let output_path = path_builder.build().map_err(|e| {
+                CliError::InvalidArgument(format!("Failed to build output path: {e}"))
+            })?;
+
+            info!(
+                "Processing month {}: {} to {}",
+                month_range.month, month_range.start_ms, month_range.end_ms
+            );
+
+            self.execute_single_job(
+                cli,
+                shutdown.clone(),
+                month_range.start_ms,
+                month_range.end_ms,
+                output_path,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Execute a single download job
+    async fn execute_single_job(
+        &self,
+        cli: &Cli,
+        shutdown: SharedShutdown,
+        start_time: i64,
+        end_time: i64,
+        output_path: PathBuf,
+    ) -> Result<(), CliError> {
         // Create download job
         let job = DownloadJob::new_aggtrades(
             self.identifier.clone(),
@@ -622,7 +745,7 @@ impl AggTradesArgs {
         // Execute download
         info!(
             "Starting aggTrades download: {} from {} to {}",
-            self.symbol, self.start_time, self.end_time
+            self.symbol, start_time, end_time
         );
 
         let result = executor.execute_aggtrades_job(job.clone()).await;
@@ -865,19 +988,74 @@ impl FundingArgs {
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
-        let output_path = self.get_output_path(cli)?;
 
-        // Ensure directories exist when using hierarchical structure
-        if self.output.is_none() {
-            use crate::output::{DataType, OutputPathBuilder};
-            let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
-            let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
-                .with_data_type(DataType::Funding);
-            builder.ensure_directories().map_err(|e| {
-                CliError::InvalidArgument(format!("Failed to create directories: {e}"))
-            })?;
+        // T067a: Backward compatibility - if --output is specified, skip month splitting
+        if let Some(output_path) = &self.output {
+            return self
+                .execute_single_job(cli, shutdown, start_time, end_time, output_path.clone())
+                .await;
         }
 
+        // US3: Multi-month splitting for hierarchical structure
+        use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
+
+        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
+
+        // Ensure base directories exist
+        let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+            .with_data_type(DataType::Funding);
+        builder.ensure_directories().map_err(|e| {
+            CliError::InvalidArgument(format!("Failed to create directories: {e}"))
+        })?;
+
+        // Split time range into monthly chunks
+        let month_ranges = split_into_month_ranges(start_time, end_time);
+
+        info!(
+            "Downloading {} months of funding data: {} from {} to {}",
+            month_ranges.len(),
+            self.symbol,
+            self.start_time,
+            self.end_time
+        );
+
+        // Execute a job for each month
+        for month_range in month_ranges {
+            let path_builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+                .with_data_type(DataType::Funding)
+                .with_month(month_range.month);
+
+            let output_path = path_builder.build().map_err(|e| {
+                CliError::InvalidArgument(format!("Failed to build output path: {e}"))
+            })?;
+
+            info!(
+                "Processing month {}: {} to {}",
+                month_range.month, month_range.start_ms, month_range.end_ms
+            );
+
+            self.execute_single_job(
+                cli,
+                shutdown.clone(),
+                month_range.start_ms,
+                month_range.end_ms,
+                output_path,
+            )
+            .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Execute a single download job
+    async fn execute_single_job(
+        &self,
+        cli: &Cli,
+        shutdown: SharedShutdown,
+        start_time: i64,
+        end_time: i64,
+        output_path: PathBuf,
+    ) -> Result<(), CliError> {
         // Create download job
         let job = DownloadJob::new_funding(
             self.identifier.clone(),
@@ -937,7 +1115,7 @@ impl FundingArgs {
         // Execute download
         info!(
             "Starting funding rates download: {} from {} to {}",
-            self.symbol, self.start_time, self.end_time
+            self.symbol, start_time, end_time
         );
 
         let result = executor.execute_funding_job(job.clone()).await;

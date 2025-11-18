@@ -261,6 +261,251 @@ fn test_multiple_venues() {
     );
 }
 
+/// T057: Test filename for bars includes interval and month
+#[test]
+fn test_filename_bars_includes_interval_and_month() {
+    let temp_dir = TempDir::new().unwrap();
+
+    Command::cargo_bin("trading-data-downloader")
+        .unwrap()
+        .args(&[
+            "download",
+            "bars",
+            "--identifier",
+            "BINANCE:BTC/USDT:USDT",
+            "--symbol",
+            "BTCUSDT",
+            "--interval",
+            "1m",
+            "--start-time",
+            "2024-01-15",
+            "--end-time",
+            "2024-01-16",
+            "--data-dir",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Verify filename format: {SYMBOL}-bars-{interval}-{YYYY-MM}.csv
+    let symbol_dir = temp_dir
+        .path()
+        .join("binance_futures_usdt")
+        .join("BTCUSDT");
+
+    let entries: Vec<_> = fs::read_dir(&symbol_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    assert_eq!(entries.len(), 1, "Expected exactly one file");
+    assert_eq!(entries[0], "BTCUSDT-bars-1m-2024-01.csv");
+}
+
+/// T058: Test filename for aggtrades includes month
+#[test]
+fn test_filename_aggtrades_includes_month() {
+    let temp_dir = TempDir::new().unwrap();
+
+    Command::cargo_bin("trading-data-downloader")
+        .unwrap()
+        .args(&[
+            "download",
+            "agg-trades",
+            "--identifier",
+            "BINANCE:BTC/USDT:USDT",
+            "--symbol",
+            "BTCUSDT",
+            "--start-time",
+            "2024-02-15",
+            "--end-time",
+            "2024-02-16",
+            "--data-dir",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Verify filename format: {SYMBOL}-aggtrades-{YYYY-MM}.csv
+    let symbol_dir = temp_dir
+        .path()
+        .join("binance_futures_usdt")
+        .join("BTCUSDT");
+
+    let entries: Vec<_> = fs::read_dir(&symbol_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    assert_eq!(entries.len(), 1, "Expected exactly one file");
+    assert_eq!(entries[0], "BTCUSDT-aggtrades-2024-02.csv");
+}
+
+/// T059: Test filename for funding includes month
+#[test]
+fn test_filename_funding_includes_month() {
+    let temp_dir = TempDir::new().unwrap();
+
+    Command::cargo_bin("trading-data-downloader")
+        .unwrap()
+        .args(&[
+            "download",
+            "funding",
+            "--identifier",
+            "BINANCE:BTC/USDT:USDT",
+            "--symbol",
+            "BTCUSDT",
+            "--start-time",
+            "2024-03-15",
+            "--end-time",
+            "2024-03-16",
+            "--data-dir",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Verify filename format: {SYMBOL}-funding-{YYYY-MM}.csv
+    let symbol_dir = temp_dir
+        .path()
+        .join("binance_futures_usdt")
+        .join("BTCUSDT");
+
+    let entries: Vec<_> = fs::read_dir(&symbol_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    assert_eq!(entries.len(), 1, "Expected exactly one file");
+    assert_eq!(entries[0], "BTCUSDT-funding-2024-03.csv");
+}
+
+/// T060: Test multi-month download creates separate files
+#[test]
+fn test_multi_month_creates_separate_files() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Download 3 months of data: Jan, Feb, Mar 2024
+    Command::cargo_bin("trading-data-downloader")
+        .unwrap()
+        .args(&[
+            "download",
+            "bars",
+            "--identifier",
+            "BINANCE:BTC/USDT:USDT",
+            "--symbol",
+            "BTCUSDT",
+            "--interval",
+            "1h",
+            "--start-time",
+            "2024-01-01",
+            "--end-time",
+            "2024-03-31",
+            "--data-dir",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Verify 3 separate files created
+    let symbol_dir = temp_dir
+        .path()
+        .join("binance_futures_usdt")
+        .join("BTCUSDT");
+
+    let mut entries: Vec<_> = fs::read_dir(&symbol_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+
+    entries.sort();
+
+    assert_eq!(entries.len(), 3, "Expected 3 monthly files");
+    assert_eq!(entries[0], "BTCUSDT-bars-1h-2024-01.csv");
+    assert_eq!(entries[1], "BTCUSDT-bars-1h-2024-02.csv");
+    assert_eq!(entries[2], "BTCUSDT-bars-1h-2024-03.csv");
+}
+
+/// T061: Test downloading same month twice merges data
+#[test]
+fn test_same_month_twice_appends_data() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // First download: Jan 1-10
+    Command::cargo_bin("trading-data-downloader")
+        .unwrap()
+        .args(&[
+            "download",
+            "bars",
+            "--identifier",
+            "BINANCE:BTC/USDT:USDT",
+            "--symbol",
+            "BTCUSDT",
+            "--interval",
+            "1d",
+            "--start-time",
+            "2024-01-01",
+            "--end-time",
+            "2024-01-10",
+            "--data-dir",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let symbol_dir = temp_dir
+        .path()
+        .join("binance_futures_usdt")
+        .join("BTCUSDT");
+    let file_path = symbol_dir.join("BTCUSDT-bars-1d-2024-01.csv");
+
+    // Check file exists and get initial size
+    assert!(file_path.exists());
+    let initial_metadata = fs::metadata(&file_path).unwrap();
+    let initial_size = initial_metadata.len();
+
+    // Second download: Jan 11-20 (different data, same month)
+    Command::cargo_bin("trading-data-downloader")
+        .unwrap()
+        .args(&[
+            "download",
+            "bars",
+            "--identifier",
+            "BINANCE:BTC/USDT:USDT",
+            "--symbol",
+            "BTCUSDT",
+            "--interval",
+            "1d",
+            "--start-time",
+            "2024-01-11",
+            "--end-time",
+            "2024-01-20",
+            "--data-dir",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // Verify still only one file (not two)
+    let entries: Vec<_> = fs::read_dir(&symbol_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
+    assert_eq!(entries.len(), 1, "Should still have only one file");
+
+    // Verify file size increased (data was appended)
+    let final_metadata = fs::metadata(&file_path).unwrap();
+    let final_size = final_metadata.len();
+    assert!(
+        final_size > initial_size,
+        "File should have grown after second download"
+    );
+}
+
 /// Test backward compatibility: --output flag should bypass hierarchical structure
 #[test]
 #[ignore = "requires implementation - will be enabled in US4"]
