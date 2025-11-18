@@ -14,7 +14,6 @@ use tempfile::TempDir;
 
 /// T032: Test hierarchical structure is created by default
 #[test]
-#[ignore = "requires implementation of hierarchical structure"]
 fn test_hierarchical_structure_default() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -30,9 +29,9 @@ fn test_hierarchical_structure_default() {
             "--interval",
             "1m",
             "--start-time",
-            "2024-01-01T00:00:00Z",
+            "2024-01-01",
             "--end-time",
-            "2024-01-01T01:00:00Z",
+            "2024-01-02",
             "--data-dir",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -65,7 +64,6 @@ fn test_hierarchical_structure_default() {
 
 /// T033: Test venue directory is created automatically
 #[test]
-#[ignore = "requires implementation of hierarchical structure"]
 fn test_venue_directory_created_automatically() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -81,9 +79,9 @@ fn test_venue_directory_created_automatically() {
             "--interval",
             "1m",
             "--start-time",
-            "2024-01-01T00:00:00Z",
+            "2024-01-01",
             "--end-time",
-            "2024-01-01T01:00:00Z",
+            "2024-01-02",
             "--data-dir",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -101,7 +99,6 @@ fn test_venue_directory_created_automatically() {
 
 /// T034: Test symbol directory is created automatically
 #[test]
-#[ignore = "requires implementation of hierarchical structure"]
 fn test_symbol_directory_created_automatically() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -117,9 +114,9 @@ fn test_symbol_directory_created_automatically() {
             "--interval",
             "1m",
             "--start-time",
-            "2024-01-01T00:00:00Z",
+            "2024-01-01",
             "--end-time",
-            "2024-01-01T01:00:00Z",
+            "2024-01-02",
             "--data-dir",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -140,7 +137,6 @@ fn test_symbol_directory_created_automatically() {
 
 /// T035: Test multiple symbols for the same venue create separate directories
 #[test]
-#[ignore = "requires implementation of hierarchical structure"]
 fn test_multiple_symbols_same_venue() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -157,9 +153,9 @@ fn test_multiple_symbols_same_venue() {
             "--interval",
             "1m",
             "--start-time",
-            "2024-01-01T00:00:00Z",
+            "2024-01-01",
             "--end-time",
-            "2024-01-01T01:00:00Z",
+            "2024-01-02",
             "--data-dir",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -179,9 +175,9 @@ fn test_multiple_symbols_same_venue() {
             "--interval",
             "1m",
             "--start-time",
-            "2024-01-01T00:00:00Z",
+            "2024-01-01",
             "--end-time",
-            "2024-01-01T01:00:00Z",
+            "2024-01-02",
             "--data-dir",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -204,7 +200,6 @@ fn test_multiple_symbols_same_venue() {
 
 /// T036: Test multiple venues create separate directories
 #[test]
-#[ignore = "requires implementation of hierarchical structure"]
 fn test_multiple_venues() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -221,9 +216,9 @@ fn test_multiple_venues() {
             "--interval",
             "1m",
             "--start-time",
-            "2024-01-01T00:00:00Z",
+            "2024-01-01",
             "--end-time",
-            "2024-01-01T01:00:00Z",
+            "2024-01-02",
             "--data-dir",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -243,9 +238,9 @@ fn test_multiple_venues() {
             "--interval",
             "1m",
             "--start-time",
-            "2024-01-01T00:00:00Z",
+            "2024-01-01",
             "--end-time",
-            "2024-01-01T01:00:00Z",
+            "2024-01-02",
             "--data-dir",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -285,9 +280,9 @@ fn test_backward_compatibility_output_flag() {
             "--interval",
             "1m",
             "--start-time",
-            "2024-01-01T00:00:00Z",
+            "2024-01-01",
             "--end-time",
-            "2024-01-01T01:00:00Z",
+            "2024-01-02",
             "--output",
             custom_path.to_str().unwrap(),
         ])

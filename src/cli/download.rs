@@ -75,6 +75,10 @@ pub struct Cli {
     /// Force re-download even if output file already covers the requested range
     #[arg(long, global = true, default_value_t = false)]
     pub force: bool,
+
+    /// Data root directory for hierarchical file organization (default: "data")
+    #[arg(long, global = true)]
+    pub data_dir: Option<PathBuf>,
 }
 
 /// CLI commands
@@ -356,7 +360,7 @@ impl BarsArgs {
     }
 
     /// Get output path or generate hierarchical path
-    fn get_output_path(&self, _cli: &Cli) -> Result<PathBuf, CliError> {
+    fn get_output_path(&self, cli: &Cli) -> Result<PathBuf, CliError> {
         // Backward compatibility: If --output specified, use it exactly
         if let Some(output) = &self.output {
             return Ok(output.clone());
@@ -366,7 +370,7 @@ impl BarsArgs {
         use crate::output::{DataType, OutputPathBuilder};
         use crate::Interval;
 
-        let root = PathBuf::from("data"); // Phase 4 will add cli.data_dir support
+        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
 
         let interval = Interval::from_str(&self.interval)
             .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
@@ -392,7 +396,7 @@ impl BarsArgs {
         // Ensure directories exist when using hierarchical structure
         if self.output.is_none() {
             use crate::output::{DataType, OutputPathBuilder};
-            let root = PathBuf::from("data");
+            let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
             let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
                 .with_data_type(DataType::Bars);
             builder.ensure_directories().map_err(|e| {
@@ -521,7 +525,7 @@ impl AggTradesArgs {
     }
 
     /// Get output path or generate hierarchical path
-    fn get_output_path(&self, _cli: &Cli) -> Result<PathBuf, CliError> {
+    fn get_output_path(&self, cli: &Cli) -> Result<PathBuf, CliError> {
         // Backward compatibility: If --output specified, use it exactly
         if let Some(output) = &self.output {
             return Ok(output.clone());
@@ -530,7 +534,7 @@ impl AggTradesArgs {
         // Use hierarchical structure: data/{venue}/{symbol}/
         use crate::output::{DataType, OutputPathBuilder};
 
-        let root = PathBuf::from("data"); // Phase 4 will add cli.data_dir support
+        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
         let start_time = self.parse_start_time()?;
 
         let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
@@ -551,7 +555,7 @@ impl AggTradesArgs {
         // Ensure directories exist when using hierarchical structure
         if self.output.is_none() {
             use crate::output::{DataType, OutputPathBuilder};
-            let root = PathBuf::from("data");
+            let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
             let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
                 .with_data_type(DataType::AggTrades);
             builder.ensure_directories().map_err(|e| {
@@ -836,7 +840,7 @@ impl FundingArgs {
     }
 
     /// Get output path or generate hierarchical path
-    fn get_output_path(&self, _cli: &Cli) -> Result<PathBuf, CliError> {
+    fn get_output_path(&self, cli: &Cli) -> Result<PathBuf, CliError> {
         // Backward compatibility: If --output specified, use it exactly
         if let Some(output) = &self.output {
             return Ok(output.clone());
@@ -845,7 +849,7 @@ impl FundingArgs {
         // Use hierarchical structure: data/{venue}/{symbol}/
         use crate::output::{DataType, OutputPathBuilder};
 
-        let root = PathBuf::from("data"); // Phase 4 will add cli.data_dir support
+        let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
         let start_time = self.parse_start_time()?;
 
         let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
@@ -866,7 +870,7 @@ impl FundingArgs {
         // Ensure directories exist when using hierarchical structure
         if self.output.is_none() {
             use crate::output::{DataType, OutputPathBuilder};
-            let root = PathBuf::from("data");
+            let root = cli.data_dir.clone().unwrap_or_else(|| PathBuf::from("data"));
             let builder = OutputPathBuilder::new(root, &self.identifier, &self.symbol)
                 .with_data_type(DataType::Funding);
             builder.ensure_directories().map_err(|e| {
