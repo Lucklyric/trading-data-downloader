@@ -7,6 +7,7 @@ Complete guide to using the Trading Data Downloader CLI.
 - [Installation](#installation)
 - [Command Overview](#command-overview)
 - [Downloading Data](#downloading-data)
+- [File Organization](#file-organization)
 - [Symbol Discovery](#symbol-discovery)
 - [Advanced Features](#advanced-features)
 - [Common Workflows](#common-workflows)
@@ -42,6 +43,7 @@ Commands:
 ### Global Options
 
 ```bash
+--data-dir <DIR>             Root directory for data files (default: ./data)
 --output-format <FORMAT>     Output format: json or human (default: human)
 --resume <MODE>              Resume mode: on, off, reset, verify (default: off)
 --resume-dir <DIR>           Custom resume state directory
@@ -67,6 +69,13 @@ trading-data-downloader download bars \
   --end-time 2024-01-31
 ```
 
+**Output:** `data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1m-2024-01.csv`
+
+Files are automatically organized by venue and symbol. Multi-month downloads create separate files:
+- `BTCUSDT-bars-1m-2024-01.csv` (January data)
+- `BTCUSDT-bars-1m-2024-02.csv` (February data)
+- etc.
+
 **Supported Intervals:**
 - `1m`, `3m`, `5m`, `15m`, `30m` - Minutes
 - `1h`, `2h`, `4h`, `6h`, `8h`, `12h` - Hours
@@ -88,17 +97,20 @@ for interval in 1m 5m 1h; do
 done
 ```
 
-**Custom Output Path:**
+**Custom Data Directory:**
 
 ```bash
+# Save to custom location
 trading-data-downloader download bars \
   --identifier "BINANCE:BTC/USDT:USDT" \
   --symbol BTCUSDT \
   --interval 1h \
   --start-time 2024-01-01 \
   --end-time 2024-12-31 \
-  --output ./data/btc_hourly_2024.csv
+  --data-dir ./my-trading-data
 ```
+
+**Output:** `./my-trading-data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1h-2024-01.csv` (and subsequent months)
 
 ### 2. Aggregate Trades
 
@@ -131,6 +143,84 @@ trading-data-downloader download funding \
 ```
 
 **Note:** Funding rates are recorded every 8 hours (00:00, 08:00, 16:00 UTC).
+
+## File Organization
+
+All downloaded files are automatically organized in a hierarchical structure for easy management:
+
+### Directory Structure
+
+```
+data/
+├── binance_futures_usdt/          # Venue: Exchange + market type
+│   ├── BTCUSDT/                   # Symbol folder
+│   │   ├── BTCUSDT-bars-1m-2024-01.csv
+│   │   ├── BTCUSDT-bars-1m-2024-02.csv
+│   │   ├── BTCUSDT-bars-1h-2024-01.csv
+│   │   ├── BTCUSDT-aggtrades-2024-01.csv
+│   │   └── BTCUSDT-funding-2024-01.csv
+│   ├── ETHUSDT/
+│   │   ├── ETHUSDT-bars-1m-2024-01.csv
+│   │   └── ETHUSDT-aggtrades-2024-01.csv
+│   └── SOLUSDT/
+│       └── SOLUSDT-bars-1h-2024-01.csv
+└── binance_futures_coin/          # COIN-margined futures
+    └── BTCUSD_PERP/
+        └── BTCUSD_PERP-bars-1m-2024-01.csv
+```
+
+### Filename Format
+
+Files follow this naming convention:
+- **Bars:** `{SYMBOL}-bars-{interval}-{YYYY-MM}.csv`
+- **AggTrades:** `{SYMBOL}-aggtrades-{YYYY-MM}.csv`
+- **Funding:** `{SYMBOL}-funding-{YYYY-MM}.csv`
+
+**Examples:**
+- `BTCUSDT-bars-1m-2024-01.csv` - 1-minute bars for January 2024
+- `ETHUSDT-aggtrades-2024-02.csv` - Aggregate trades for February 2024
+- `SOLUSDT-funding-2024-03.csv` - Funding rates for March 2024
+
+### Monthly File Splitting
+
+Downloads spanning multiple months automatically create separate files:
+
+```bash
+# This command:
+trading-data-downloader download bars \
+  --identifier "BINANCE:BTC/USDT:USDT" \
+  --symbol BTCUSDT \
+  --interval 1h \
+  --start-time 2024-01-01 \
+  --end-time 2024-03-31
+
+# Creates these files:
+# data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1h-2024-01.csv
+# data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1h-2024-02.csv
+# data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1h-2024-03.csv
+```
+
+**Benefits:**
+- Easy to locate specific symbols and time periods
+- Manageable file sizes (one month per file)
+- Clean separation between venues and data types
+- Scalable to thousands of files
+
+### Custom Data Directory
+
+Change the root data directory using `--data-dir`:
+
+```bash
+trading-data-downloader download bars \
+  --data-dir /mnt/storage/crypto-data \
+  --identifier "BINANCE:BTC/USDT:USDT" \
+  --symbol BTCUSDT \
+  --interval 1m \
+  --start-time 2024-01-01 \
+  --end-time 2024-01-31
+```
+
+**Output:** `/mnt/storage/crypto-data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1m-2024-01.csv`
 
 ## Symbol Discovery
 
@@ -345,21 +435,27 @@ Press `Ctrl+C` to pause, then restart with same command to resume.
 
 ## Output Format
 
-All data is saved as CSV files with the following structure:
+All data is saved as CSV files in the hierarchical directory structure `data/{venue}/{symbol}/`.
 
 **Bars (OHLCV):**
+- **Location:** `data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1m-2024-01.csv`
+- **Format:**
 ```csv
 timestamp,open,high,low,close,volume,trades
 1704067200000,42150.50,42200.00,42100.00,42180.30,150.250,1250
 ```
 
 **Aggregate Trades:**
+- **Location:** `data/binance_futures_usdt/BTCUSDT/BTCUSDT-aggtrades-2024-01.csv`
+- **Format:**
 ```csv
 agg_trade_id,price,quantity,first_trade_id,last_trade_id,timestamp,is_buyer_maker
 12345678,42150.50,0.500,98765,98770,1704067200000,false
 ```
 
 **Funding Rates:**
+- **Location:** `data/binance_futures_usdt/BTCUSDT/BTCUSDT-funding-2024-01.csv`
+- **Format:**
 ```csv
 timestamp,funding_rate,mark_price
 1704067200000,0.0001,42150.50
