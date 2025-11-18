@@ -87,6 +87,10 @@ pub enum OutputError {
     /// Buffer flush error
     #[error("flush error: {0}")]
     FlushError(String),
+
+    /// Configuration or validation error (not an IO issue)
+    #[error("configuration error: {0}")]
+    ConfigurationError(String),
 }
 
 /// Result type for output operations

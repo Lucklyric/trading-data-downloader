@@ -183,7 +183,9 @@ impl OutputPathBuilder {
         match self.data_type {
             DataType::Bars => {
                 let interval = self.interval.ok_or_else(|| {
-                    OutputError::IoError("Interval required for bars data type".to_string())
+                    OutputError::ConfigurationError(
+                        "Interval required for bars data type".to_string(),
+                    )
                 })?;
                 Ok(format!(
                     "{}-bars-{}-{}.csv",
