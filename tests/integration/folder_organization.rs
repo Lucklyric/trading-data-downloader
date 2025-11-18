@@ -479,13 +479,13 @@ fn test_same_month_twice_appends_data() {
     );
 }
 
-/// Test backward compatibility: --output flag should bypass hierarchical structure
+/// Test that --output flag no longer exists (breaking change)
 #[test]
-fn test_backward_compatibility_output_flag() {
-    let temp_dir = TempDir::new().unwrap();
-    let custom_path = temp_dir.path().join("my_custom_file.csv");
+fn test_output_flag_removed() {
+    // This test verifies the --output flag has been removed
+    // All downloads now MUST use hierarchical structure
 
-    Command::cargo_bin("trading-data-downloader")
+    let output = Command::cargo_bin("trading-data-downloader")
         .unwrap()
         .args(&[
             "download",
@@ -501,22 +501,16 @@ fn test_backward_compatibility_output_flag() {
             "--end-time",
             "2024-01-02",
             "--output",
-            custom_path.to_str().unwrap(),
+            "/some/path.csv",
         ])
         .assert()
-        .success();
+        .failure();
 
-    // Verify file exists at custom path
+    // Verify error message indicates unrecognized argument
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
     assert!(
-        custom_path.exists(),
-        "Custom output file not created at: {}",
-        custom_path.display()
-    );
-
-    // Verify NO hierarchical structure was created
-    let hierarchical_dir = temp_dir.path().join("binance_futures_usdt");
-    assert!(
-        !hierarchical_dir.exists(),
-        "Hierarchical structure should NOT be created when --output is specified"
+        stderr.contains("unexpected argument") || stderr.contains("unrecognized"),
+        "Expected error about unrecognized --output flag, got: {}",
+        stderr
     );
 }

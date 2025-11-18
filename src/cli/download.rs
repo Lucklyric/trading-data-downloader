@@ -135,10 +135,6 @@ pub struct BarsArgs {
     /// End time (YYYY-MM-DD format)
     #[arg(long)]
     pub end_time: String,
-
-    /// Output file path
-    #[arg(long, short = 'o')]
-    pub output: Option<PathBuf>,
 }
 
 /// Arguments for downloading aggregate trades (T129)
@@ -159,10 +155,6 @@ pub struct AggTradesArgs {
     /// End time (YYYY-MM-DD format or YYYY-MM-DDTHH:MM:SS)
     #[arg(long)]
     pub end_time: String,
-
-    /// Output file path
-    #[arg(long, short = 'o')]
-    pub output: Option<PathBuf>,
 }
 
 /// Arguments for downloading funding rates (T151)
@@ -183,10 +175,6 @@ pub struct FundingArgs {
     /// End time (YYYY-MM-DD format or YYYY-MM-DDTHH:MM:SS)
     #[arg(long)]
     pub end_time: String,
-
-    /// Output file path
-    #[arg(long, short = 'o')]
-    pub output: Option<PathBuf>,
 }
 
 /// Output format options (T086)
@@ -366,21 +354,7 @@ impl BarsArgs {
         let interval = Interval::from_str(&self.interval)
             .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
 
-        // T067a: Backward compatibility - if --output is specified, skip month splitting
-        if let Some(output_path) = &self.output {
-            return self
-                .execute_single_job(
-                    cli,
-                    shutdown,
-                    interval,
-                    start_time,
-                    end_time,
-                    output_path.clone(),
-                )
-                .await;
-        }
-
-        // US3: Multi-month splitting for hierarchical structure
+        // Always use hierarchical structure - no exceptions
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
 
         let root = cli
@@ -569,14 +543,7 @@ impl AggTradesArgs {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
 
-        // T067a: Backward compatibility - if --output is specified, skip month splitting
-        if let Some(output_path) = &self.output {
-            return self
-                .execute_single_job(cli, shutdown, start_time, end_time, output_path.clone())
-                .await;
-        }
-
-        // US3: Multi-month splitting for hierarchical structure
+        // Always use hierarchical structure - no exceptions
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
 
         let root = cli
@@ -920,14 +887,7 @@ impl FundingArgs {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
 
-        // T067a: Backward compatibility - if --output is specified, skip month splitting
-        if let Some(output_path) = &self.output {
-            return self
-                .execute_single_job(cli, shutdown, start_time, end_time, output_path.clone())
-                .await;
-        }
-
-        // US3: Multi-month splitting for hierarchical structure
+        // Always use hierarchical structure - no exceptions
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
 
         let root = cli
