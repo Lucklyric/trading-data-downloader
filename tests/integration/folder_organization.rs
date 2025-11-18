@@ -5,7 +5,7 @@
 //! - Automatic directory creation
 //! - Multi-venue and multi-symbol support
 //! - Enhanced filename format
-//! - Backward compatibility with --output flag
+//! - Breaking change: --output flag properly rejected
 //! - Custom data directory via --data-dir flag
 
 use assert_cmd::Command;

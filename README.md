@@ -84,6 +84,26 @@ data/
 - `--force` - Re-download even if data already exists
 - `--concurrency N` - Download multiple symbols concurrently
 
+## Security Considerations
+
+**Path Trust Model**: This tool is designed for local use with trusted inputs.
+
+- **Symbol names** are used as-is from exchange APIs and directly in file paths
+- **`--data-dir`** paths are user-controlled and joined to construct output paths
+- The tool **does not sanitize or validate** symbol names or custom data directories
+- **Untrusted inputs** should be validated by the caller before passing to this tool
+
+**Safe Usage**:
+- Only use symbols from known, trusted exchanges
+- Validate custom `--data-dir` paths before use
+- Run with minimal permissions (avoid root/administrator)
+- Use default `./data` directory for most cases
+
+**Not Recommended**:
+- Passing untrusted symbol names (e.g., from user input without validation)
+- Using `--data-dir` pointing to system directories
+- Running with elevated privileges unless necessary
+
 ## Documentation
 
 - [Usage Guide](docs/usage.md) - Detailed command examples and common workflows

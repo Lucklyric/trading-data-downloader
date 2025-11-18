@@ -11,6 +11,8 @@ Complete guide to using the Trading Data Downloader CLI.
 - [Symbol Discovery](#symbol-discovery)
 - [Advanced Features](#advanced-features)
 - [Common Workflows](#common-workflows)
+- [Security & Path Safety](#security--path-safety)
+- [Troubleshooting](#troubleshooting)
 
 ## Installation
 
@@ -459,6 +461,50 @@ agg_trade_id,price,quantity,first_trade_id,last_trade_id,timestamp,is_buyer_make
 ```csv
 timestamp,funding_rate,mark_price
 1704067200000,0.0001,42150.50
+```
+
+## Security & Path Safety
+
+### Path Trust Model
+
+This tool is designed for **local use with trusted inputs**:
+
+- **Symbol names** are used as-is from exchange APIs and directly incorporated into file paths
+- **`--data-dir` paths** are user-controlled and joined to construct output paths
+- The tool **does not sanitize or validate** symbol names or custom data directory paths
+- **Untrusted inputs** should be validated by the caller before passing to this tool
+
+### Safe Usage Recommendations
+
+✅ **Recommended**:
+- Use symbols directly from exchange APIs (Binance, etc.)
+- Stick to default `./data` directory for most cases
+- Validate custom `--data-dir` paths before use
+- Run with minimal user permissions
+
+❌ **Not Recommended**:
+- Passing untrusted symbol names from user input without validation
+- Using `--data-dir` pointing to system directories (`/etc`, `/usr`, `C:\Windows`)
+- Running as root/administrator unless absolutely necessary
+- Accepting arbitrary paths from external sources
+
+### Example: Safe Automation
+
+```bash
+#!/bin/bash
+# Safe: using known symbols
+SYMBOLS=("BTCUSDT" "ETHUSDT" "SOLUSDT")
+DATA_DIR="./trading-data"  # Safe: relative path in project
+
+for symbol in "${SYMBOLS[@]}"; do
+  trading-data-downloader download bars \
+    --identifier "BINANCE:BTC/USDT:USDT" \
+    --symbol "$symbol" \
+    --interval 1h \
+    --start-time 2024-01-01 \
+    --end-time 2024-12-31 \
+    --data-dir "$DATA_DIR"
+done
 ```
 
 ## Troubleshooting

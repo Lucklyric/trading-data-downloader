@@ -209,9 +209,8 @@ fn test_cli_funding_command() {
     use tempfile::TempDir;
 
     let temp_dir = TempDir::new().unwrap();
-    let output_path = temp_dir.path().join("btcusdt_funding.csv");
 
-    // Build the CLI command
+    // Build the CLI command with hierarchical structure (Feature 005)
     let output = Command::new("cargo")
         .args(&[
             "run",
@@ -226,8 +225,8 @@ fn test_cli_funding_command() {
             "2024-01-01",
             "--end-time",
             "2024-01-02",
-            "--output",
-            output_path.to_str().unwrap(),
+            "--data-dir",
+            temp_dir.path().to_str().unwrap(),
         ])
         .output();
 
@@ -242,11 +241,20 @@ fn test_cli_funding_command() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Verify output file was created
-    assert!(output_path.exists(), "Output file should be created by CLI");
+    // Verify hierarchical output path was created: data/{venue}/{symbol}/filename.csv
+    let expected_path = temp_dir
+        .path()
+        .join("binance_futures_usdt")
+        .join("BTCUSDT")
+        .join("BTCUSDT-funding-2024-01.csv");
+    assert!(
+        expected_path.exists(),
+        "Output file should be created at hierarchical path: {}",
+        expected_path.display()
+    );
 
     // Verify output contains funding rate data
-    let content = std::fs::read_to_string(&output_path).unwrap();
+    let content = std::fs::read_to_string(&expected_path).unwrap();
     assert!(content.contains("symbol"), "Output should have CSV headers");
     assert!(
         content.contains("funding_rate"),
