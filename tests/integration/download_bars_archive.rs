@@ -132,7 +132,7 @@ fn test_date_range_generation() {
     let start_time = 1704067200000; // 2024-01-01 00:00:00 UTC
     let end_time = 1704326400000; // 2024-01-04 00:00:00 UTC
 
-    let dates = ArchiveDownloader::date_range_for_timestamps(start_time, end_time);
+    let dates = ArchiveDownloader::date_range_for_timestamps(start_time, end_time).unwrap();
 
     assert_eq!(dates.len(), 4, "Should have 4 dates in range");
 
@@ -152,7 +152,8 @@ fn test_date_range_generation() {
     let single_start = 1704067200000; // 2024-01-01 00:00:00 UTC
     let single_end = 1704153600000; // 2024-01-02 00:00:00 UTC
 
-    let single_dates = ArchiveDownloader::date_range_for_timestamps(single_start, single_end);
+    let single_dates =
+        ArchiveDownloader::date_range_for_timestamps(single_start, single_end).unwrap();
     assert_eq!(single_dates.len(), 2, "Should have 2 dates for single day");
 }
 

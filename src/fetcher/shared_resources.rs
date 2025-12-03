@@ -16,12 +16,29 @@ use std::time::Duration;
 
 use crate::downloader::rate_limit::RateLimiter;
 
+/// HTTP connect timeout (seconds) - time to establish TCP connection
+const HTTP_CONNECT_TIMEOUT_SECS: u64 = 10;
+/// HTTP request timeout (seconds) - overall time for the entire request
+const HTTP_REQUEST_TIMEOUT_SECS: u64 = 30;
+
 /// Global HTTP client shared by all fetcher instances
 ///
 /// The reqwest::Client is designed to be cloned cheaply (uses Arc internally),
 /// but we explicitly use a global instance to ensure connection pooling works
 /// optimally across all download operations.
-pub static GLOBAL_HTTP_CLIENT: Lazy<Arc<Client>> = Lazy::new(|| Arc::new(Client::new()));
+///
+/// Configured with explicit timeouts to prevent indefinite hangs:
+/// - Connect timeout: 10 seconds
+/// - Request timeout: 30 seconds
+pub static GLOBAL_HTTP_CLIENT: Lazy<Arc<Client>> = Lazy::new(|| {
+    Arc::new(
+        Client::builder()
+            .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
+            .build()
+            .expect("Failed to build HTTP client"),
+    )
+});
 
 /// Global rate limiter for Binance Futures endpoints (both USDT and COIN)
 ///

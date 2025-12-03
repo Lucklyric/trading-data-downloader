@@ -16,22 +16,30 @@ use tempfile::TempDir;
 use tracing::{debug, info, warn};
 use zip::ZipArchive;
 
+use super::shared_resources::global_http_client;
 use super::{FetcherError, FetcherResult};
 
 const BINANCE_VISION_BASE_URL: &str = "https://data.binance.vision";
 const ARCHIVE_PATH_TEMPLATE: &str = "/data/futures/um/daily/klines";
 
 /// Archive downloader for Binance Vision historical data
+///
+/// Uses the global HTTP client with proper timeouts (F038):
+/// - Connect timeout: 10 seconds
+/// - Request timeout: 30 seconds
 pub struct ArchiveDownloader {
-    client: Client,
+    client: std::sync::Arc<Client>,
     base_url: String,
 }
 
 impl ArchiveDownloader {
     /// Create a new archive downloader
+    ///
+    /// Uses the global HTTP client with configured timeouts to prevent
+    /// indefinite hangs on network issues.
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: global_http_client(),
             base_url: BINANCE_VISION_BASE_URL.to_string(),
         }
     }
@@ -40,7 +48,7 @@ impl ArchiveDownloader {
     #[allow(dead_code)]
     pub fn new_with_base_url(base_url: String) -> Self {
         Self {
-            client: Client::new(),
+            client: global_http_client(),
             base_url,
         }
     }
@@ -338,11 +346,17 @@ impl ArchiveDownloader {
         end_time < (now - one_day_ms)
     }
 
-    /// Generate date range for archive downloads (T057)
-    pub fn date_range_for_timestamps(start_time: i64, end_time: i64) -> Vec<NaiveDate> {
-        let start_dt =
-            DateTime::from_timestamp_millis(start_time).expect("Invalid start timestamp");
-        let end_dt = DateTime::from_timestamp_millis(end_time).expect("Invalid end timestamp");
+    /// Generate date range for archive downloads (T057, F013, F014)
+    ///
+    /// Returns an error if timestamps are invalid or date iteration overflows.
+    pub fn date_range_for_timestamps(
+        start_time: i64,
+        end_time: i64,
+    ) -> FetcherResult<Vec<NaiveDate>> {
+        let start_dt = DateTime::from_timestamp_millis(start_time)
+            .ok_or(FetcherError::InvalidTimestamp(start_time))?;
+        let end_dt = DateTime::from_timestamp_millis(end_time)
+            .ok_or(FetcherError::InvalidTimestamp(end_time))?;
 
         let start_date = start_dt.date_naive();
         let end_date = end_dt.date_naive();
@@ -352,17 +366,19 @@ impl ArchiveDownloader {
 
         while current <= end_date {
             dates.push(current);
-            current = current.succ_opt().expect("Date overflow");
+            current = current
+                .succ_opt()
+                .ok_or_else(|| FetcherError::DateOverflow(current.to_string()))?;
         }
 
-        dates
+        Ok(dates)
     }
 }
 
 impl Clone for ArchiveDownloader {
     fn clone(&self) -> Self {
         Self {
-            client: Client::new(),
+            client: self.client.clone(),
             base_url: self.base_url.clone(),
         }
     }
@@ -450,12 +466,19 @@ mod tests {
         let start_time = 1704067200000; // 2024-01-01 00:00:00 UTC
         let end_time = 1704326400000; // 2024-01-04 00:00:00 UTC
 
-        let dates = ArchiveDownloader::date_range_for_timestamps(start_time, end_time);
+        let dates = ArchiveDownloader::date_range_for_timestamps(start_time, end_time).unwrap();
 
         assert_eq!(dates.len(), 4);
         assert_eq!(dates[0], NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
         assert_eq!(dates[1], NaiveDate::from_ymd_opt(2024, 1, 2).unwrap());
         assert_eq!(dates[2], NaiveDate::from_ymd_opt(2024, 1, 3).unwrap());
         assert_eq!(dates[3], NaiveDate::from_ymd_opt(2024, 1, 4).unwrap());
+    }
+
+    #[test]
+    fn test_date_range_invalid_timestamp() {
+        // Test with invalid timestamp (too large)
+        let result = ArchiveDownloader::date_range_for_timestamps(i64::MAX, i64::MAX);
+        assert!(result.is_err());
     }
 }

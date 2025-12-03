@@ -59,30 +59,43 @@ impl BinanceHttpClient {
     /// # Arguments
     /// * `endpoint` - API endpoint path (e.g., "/fapi/v1/klines")
     /// * `params` - Query parameters as key-value pairs
+    /// * `weight` - Rate limit weight for this endpoint (F037)
     ///
     /// # Returns
     /// Deserialized response of type T
     ///
     /// # Errors
     /// Returns FetcherError on network, parse, or API errors
-    pub async fn get<T>(&self, endpoint: &str, params: &[(&str, String)]) -> FetcherResult<T>
+    ///
+    /// # Rate Limiting (F037)
+    ///
+    /// The weight parameter is used to properly consume rate limit quota.
+    /// Using incorrect weights can lead to HTTP 429 errors. Endpoint weights
+    /// are defined in `BinanceMarketConfig` (e.g., klines_weight = 5).
+    pub async fn get<T>(
+        &self,
+        endpoint: &str,
+        params: &[(&str, String)],
+        weight: u32,
+    ) -> FetcherResult<T>
     where
         T: DeserializeOwned,
     {
         // 1. Build full URL
         let url = format!("{}{}", self.base_url, endpoint);
 
-        // 2. Consult rate limiter before making request
-        // Use weight of 1 as default - will be updated from response headers
+        // 2. Consult rate limiter before making request (F037)
+        // Use actual endpoint weight to properly track quota consumption
         self.rate_limiter
-            .acquire(1)
+            .acquire(weight as usize)
             .await
             .map_err(|e| FetcherError::NetworkError(format!("Rate limiter error: {e}")))?;
 
         debug!(
-            "Making GET request to: {} with {} params",
+            "Making GET request to: {} with {} params (weight: {})",
             url,
-            params.len()
+            params.len(),
+            weight
         );
 
         // 3. Execute request with retry logic
@@ -256,6 +269,9 @@ impl BinanceHttpClient {
             }
 
             // Parse weight headers before consuming response (T202)
+            // NOTE: Clone is necessary here because response.json() consumes the response,
+            // but we need to read the rate limit headers before that happens.
+            // The alternative (response.bytes() + manual parsing) would be more complex.
             let headers = response.headers().clone();
             if let Some(weight) = self.parse_weight_header(&headers) {
                 debug!("Response weight: {}", weight);

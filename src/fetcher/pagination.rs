@@ -109,6 +109,7 @@ impl PaginationHelper {
             debug!("Received {} bars in page {}", page.len(), iteration + 1);
 
             // Get last bar's close_time to advance pagination
+            // SAFETY: unwrap() is safe because we break early on empty page (line 100)
             let last_close_time = page.last().unwrap().close_time;
 
             // Extend results
@@ -206,6 +207,7 @@ impl PaginationHelper {
             debug!("Received {} trades in page {}", page.len(), iteration + 1);
 
             // Get last trade's ID to advance pagination
+            // SAFETY: unwrap() is safe because we break early on empty page (line 197)
             let last_trade_id = page.last().unwrap().agg_trade_id;
 
             // Extend results
@@ -310,6 +312,7 @@ impl PaginationHelper {
             );
 
             // Get last funding_time to advance pagination
+            // SAFETY: unwrap() is safe because we break early on empty page (line 297)
             let last_funding_time = page.last().unwrap().funding_time;
 
             // Extend results

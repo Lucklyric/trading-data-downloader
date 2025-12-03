@@ -15,8 +15,33 @@ use super::binance_parser::BinanceParser;
 use super::shared_resources::{global_binance_rate_limiter, global_http_client};
 use super::{AggTradeStream, BarStream, DataFetcher, FetcherError, FetcherResult, FundingStream};
 
-const ONE_HOUR_MS: i64 = 60 * 60 * 1000; // 1 hour in milliseconds (aggTrades API constraint)
+/// One hour in milliseconds (aggTrades API constraint)
+pub const ONE_HOUR_MS: i64 = 60 * 60 * 1000;
 const AGGTRADES_LIMIT: usize = 1000; // Max aggTrades per request
+
+/// Split a time range into one-hour chunks (pure function for testing)
+///
+/// The Binance aggTrades API has a 1-hour maximum window constraint.
+/// This function splits any time range into chunks of at most 1 hour.
+///
+/// # Arguments
+/// * `start_time` - Start timestamp in milliseconds
+/// * `end_time` - End timestamp in milliseconds
+///
+/// # Returns
+/// Vector of (chunk_start, chunk_end) tuples
+pub fn split_into_one_hour_chunks(start_time: i64, end_time: i64) -> Vec<(i64, i64)> {
+    let mut chunks = Vec::new();
+    let mut current_start = start_time;
+
+    while current_start < end_time {
+        let chunk_end = std::cmp::min(current_start + ONE_HOUR_MS, end_time);
+        chunks.push((current_start, chunk_end));
+        current_start = chunk_end;
+    }
+
+    chunks
+}
 const MAX_LIMIT: usize = 1500; // Binance API limit per klines request
 const FUNDING_RATE_LIMIT: usize = 1000; // Max funding rates per request
 
@@ -190,7 +215,11 @@ impl BinanceFuturesUsdtFetcher {
         let params: Vec<(&str, String)> = vec![];
         let body: Value = self
             .http_client
-            .get(USDT_FUTURES_CONFIG.exchange_info_endpoint, &params)
+            .get(
+                USDT_FUTURES_CONFIG.exchange_info_endpoint,
+                &params,
+                USDT_FUTURES_CONFIG.exchange_info_weight,
+            )
             .await?;
 
         let symbols_array = body
@@ -256,7 +285,11 @@ impl BinanceFuturesUsdtFetcher {
 
         let klines: Vec<Value> = self
             .http_client
-            .get(USDT_FUTURES_CONFIG.klines_endpoint, &params)
+            .get(
+                USDT_FUTURES_CONFIG.klines_endpoint,
+                &params,
+                USDT_FUTURES_CONFIG.klines_weight,
+            )
             .await?;
 
         let bars = BinanceParser::parse_klines(klines)?;
@@ -294,7 +327,11 @@ impl BinanceFuturesUsdtFetcher {
 
         let trades_json: Vec<Value> = self
             .http_client
-            .get(USDT_FUTURES_CONFIG.aggtrades_endpoint, &params)
+            .get(
+                USDT_FUTURES_CONFIG.aggtrades_endpoint,
+                &params,
+                USDT_FUTURES_CONFIG.aggtrades_weight,
+            )
             .await?;
 
         let trades = BinanceParser::parse_aggtrades(trades_json)?;
@@ -332,7 +369,11 @@ impl BinanceFuturesUsdtFetcher {
 
         let rates_json: Vec<Value> = self
             .http_client
-            .get(USDT_FUTURES_CONFIG.funding_endpoint, &params)
+            .get(
+                USDT_FUTURES_CONFIG.funding_endpoint,
+                &params,
+                USDT_FUTURES_CONFIG.funding_weight,
+            )
             .await?;
 
         let funding_rates = BinanceParser::parse_funding_rates(rates_json)?;
@@ -409,8 +450,14 @@ impl BinanceFuturesUsdtFetcher {
             let archive_downloader = self.archive_downloader.clone();
             let fetcher = self.clone(); // Capture self for live API fallback
 
-            // Generate date range for archives
-            let dates = ArchiveDownloader::date_range_for_timestamps(start_time, end_time);
+            // Generate date range for archives (F013, F014)
+            let dates = match ArchiveDownloader::date_range_for_timestamps(start_time, end_time) {
+                Ok(dates) => dates,
+                Err(e) => {
+                    // Return a stream that immediately yields the error
+                    return Box::pin(stream::once(async move { Err(e) }));
+                }
+            };
 
             let stream = stream::unfold(
                 (dates, 0usize, false),

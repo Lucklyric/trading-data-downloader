@@ -143,6 +143,9 @@ impl SourcesCommand {
             OutputFormat::Human => {
                 println!("Found {} symbols:\n", all_results.len());
                 for result in all_results {
+                    // SAFETY: These unwrap() calls are safe because the JSON objects
+                    // are constructed by this codebase with known, fixed keys.
+                    // The structure is guaranteed by build_detailed_result().
                     println!(
                         "{} | {} | {} | tick={} | step={}",
                         result["identifier"].as_str().unwrap(),

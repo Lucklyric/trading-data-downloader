@@ -91,6 +91,10 @@ pub enum OutputError {
     /// Configuration or validation error (not an IO issue)
     #[error("configuration error: {0}")]
     ConfigurationError(String),
+
+    /// Invalid timestamp that cannot be converted to a date (T040/F029D)
+    #[error("invalid timestamp: {0}")]
+    InvalidTimestamp(i64),
 }
 
 /// Result type for output operations
@@ -108,14 +112,18 @@ pub trait OutputWriter {
 /// Trait for writing OHLCV bars (T069)
 pub trait BarsWriter: OutputWriter {
     /// Write a single bar to output
-    fn write_bar(&mut self, bar: &Bar) -> OutputResult<()>;
+    /// Returns `Ok(true)` if bar was written, `Ok(false)` if skipped (e.g., duplicate)
+    fn write_bar(&mut self, bar: &Bar) -> OutputResult<bool>;
 
-    /// Write multiple bars at once
-    fn write_bars(&mut self, bars: &[Bar]) -> OutputResult<()> {
+    /// Write multiple bars at once, returns count of bars actually written
+    fn write_bars(&mut self, bars: &[Bar]) -> OutputResult<usize> {
+        let mut written = 0;
         for bar in bars {
-            self.write_bar(bar)?;
+            if self.write_bar(bar)? {
+                written += 1;
+            }
         }
-        Ok(())
+        Ok(written)
     }
 }
 

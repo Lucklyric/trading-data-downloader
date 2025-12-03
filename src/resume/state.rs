@@ -13,6 +13,9 @@ use tracing::{debug, info, warn};
 /// Current resume state schema version
 const SCHEMA_VERSION: &str = "1.0.0";
 
+/// Maximum allowed state file size (10 MB) to prevent memory exhaustion
+pub const MAX_STATE_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
 /// Resume state for a download job
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResumeState {
@@ -155,10 +158,14 @@ impl ResumeState {
             .write_all(json.as_bytes())
             .map_err(|e| ResumeError::IoError(format!("Failed to write to temp file: {e}")))?;
 
-        // Sync to ensure data is on disk before rename
+        // Flush buffer to OS and sync to disk for durability before atomic rename
         temp_file
             .flush()
             .map_err(|e| ResumeError::IoError(format!("Failed to flush temp file: {e}")))?;
+        temp_file
+            .as_file()
+            .sync_all()
+            .map_err(|e| ResumeError::IoError(format!("Failed to sync temp file: {e}")))?;
 
         // Atomically replace the target file (persists temp file to target path)
         temp_file
@@ -200,6 +207,15 @@ impl ResumeState {
         let _guard = lock
             .read()
             .map_err(|e| ResumeError::LockError(format!("Failed to acquire read lock: {e}")))?;
+
+        // Check file size before reading to prevent memory exhaustion
+        let metadata = std::fs::metadata(path).map_err(|e| ResumeError::IoError(e.to_string()))?;
+        if metadata.len() > MAX_STATE_FILE_SIZE {
+            return Err(ResumeError::StateTooLarge {
+                size: metadata.len(),
+                max: MAX_STATE_FILE_SIZE,
+            });
+        }
 
         // Read the state file while holding the lock
         let contents =
@@ -292,6 +308,15 @@ pub enum ResumeError {
         expected: String,
         /// Found schema version
         found: String,
+    },
+
+    /// State file too large
+    #[error("state file too large: {size} bytes (max: {max} bytes)")]
+    StateTooLarge {
+        /// Actual file size
+        size: u64,
+        /// Maximum allowed size
+        max: u64,
     },
 
     /// IO error

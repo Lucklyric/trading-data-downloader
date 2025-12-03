@@ -17,14 +17,8 @@ pub struct RateLimiter {
 
 #[derive(Clone)]
 enum RateLimiterType {
-    WeightBased {
-        #[allow(dead_code)]
-        max_weight: usize,
-    },
-    RequestBased {
-        #[allow(dead_code)]
-        max_requests: usize,
-    },
+    WeightBased { max_weight: usize },
+    RequestBased { max_requests: usize },
 }
 
 impl RateLimiter {
@@ -59,15 +53,40 @@ impl RateLimiter {
         matches!(self.limiter_type, RateLimiterType::WeightBased { .. })
     }
 
+    /// Get the maximum permits available for this limiter
+    fn max_permits(&self) -> usize {
+        match &self.limiter_type {
+            RateLimiterType::WeightBased { max_weight } => *max_weight,
+            RateLimiterType::RequestBased { max_requests } => *max_requests,
+        }
+    }
+
     /// Acquire permits for a request
     ///
     /// # Arguments
-    /// * `weight` - Number of weight units to acquire
+    /// * `weight` - Number of weight units to acquire (must be > 0 and <= max_permits)
+    ///
+    /// # Errors
+    /// Returns `RateLimitError::InvalidWeight` if weight is 0 or exceeds max permits
     ///
     /// # P0-5 Fix: Use OwnedSemaphorePermit to hold permits until window elapses
     /// Previously, permits were dropped immediately (RAII) then add_permits()
     /// was called, causing double-restoration and permit leakage.
     pub async fn acquire(&self, weight: usize) -> Result<(), RateLimitError> {
+        // Validate weight to prevent panic (weight=0) or deadlock (weight > max)
+        if weight == 0 {
+            return Err(RateLimitError::InvalidWeight(
+                "weight must be greater than 0".to_string(),
+            ));
+        }
+        let max = self.max_permits();
+        if weight > max {
+            return Err(RateLimitError::InvalidWeight(format!(
+                "weight {} exceeds maximum permits {}",
+                weight, max
+            )));
+        }
+
         // Acquire owned semaphore permits (not dropped at function end)
         let permit = self
             .semaphore
@@ -86,6 +105,22 @@ impl RateLimiter {
         Ok(())
     }
 
+    /// Calculate backoff delay without sleeping (pure function for testing)
+    ///
+    /// # Arguments
+    /// * `attempt` - Attempt number (1-indexed)
+    ///
+    /// # Returns
+    /// The calculated delay duration
+    pub fn backoff_delay(&self, attempt: u32) -> Duration {
+        let base_delay = Duration::from_secs(1);
+        let max_delay = Duration::from_secs(120); // 2 minutes cap
+
+        // Exponential backoff: base_delay * 2^(attempt-1)
+        let delay_secs = base_delay.as_secs() * 2_u64.pow(attempt.saturating_sub(1));
+        Duration::from_secs(delay_secs).min(max_delay)
+    }
+
     /// Handle a rate limit error (429 response) with exponential backoff
     ///
     /// # Arguments
@@ -94,13 +129,7 @@ impl RateLimiter {
     /// # Returns
     /// The delay duration that was applied
     pub async fn handle_rate_limit_error(&self, attempt: u32) -> Duration {
-        let base_delay = Duration::from_secs(1);
-        let max_delay = Duration::from_secs(120); // 2 minutes cap
-
-        // Exponential backoff: base_delay * 2^(attempt-1)
-        let delay_secs = base_delay.as_secs() * 2_u64.pow(attempt.saturating_sub(1));
-        let delay = Duration::from_secs(delay_secs).min(max_delay);
-
+        let delay = self.backoff_delay(attempt);
         sleep(delay).await;
         delay
     }
@@ -118,6 +147,10 @@ pub enum RateLimitError {
     /// Failed to acquire permits
     #[error("failed to acquire rate limit permits: {0}")]
     AcquireError(String),
+
+    /// Invalid weight value (zero or exceeds max)
+    #[error("invalid weight: {0}")]
+    InvalidWeight(String),
 }
 
 #[cfg(test)]

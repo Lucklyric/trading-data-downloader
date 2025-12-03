@@ -1,23 +1,36 @@
 //! File locking for concurrent resume state access
 //!
 //! Implements advisory file locking using fd-lock (FR-037)
+//!
+//! # Usage
+//!
+//! ```ignore
+//! let mut resume_lock = ResumeLock::new(path)?;
+//! let _guard = resume_lock.write()?;  // Lock held while _guard exists
+//! // ... do protected work ...
+//! // Lock released when _guard is dropped
+//! ```
 
 use super::state::ResumeError;
-use fd_lock::RwLock;
+use fd_lock::{RwLock, RwLockWriteGuard};
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 
 /// Resume state lock wrapper
+///
+/// The lock is not held until you call [`write()`](Self::write) and hold
+/// the returned guard. The lock is released when the guard is dropped.
 pub struct ResumeLock {
-    #[allow(dead_code)]
     lock: RwLock<File>,
 }
 
 impl ResumeLock {
-    /// Acquire an exclusive lock on the resume state file
+    /// Create a new lock handle for the given path
     ///
-    /// Blocks until the lock is available.
-    pub fn acquire(path: &Path) -> Result<Self, ResumeError> {
+    /// This creates/opens the lock file but does NOT acquire the lock.
+    /// Call [`write()`](Self::write) or [`try_write()`](Self::try_write)
+    /// to acquire the lock.
+    pub fn new(path: &Path) -> Result<Self, ResumeError> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| ResumeError::IoError(e.to_string()))?;
@@ -33,44 +46,49 @@ impl ResumeLock {
             .open(&lock_path)
             .map_err(|e| ResumeError::LockError(format!("Failed to open lock file: {e}")))?;
 
-        let mut lock = RwLock::new(file);
-
-        // Acquire exclusive lock (blocks)
-        let _ = lock
-            .write()
-            .map_err(|e| ResumeError::LockError(format!("Failed to acquire lock: {e}")))?;
-
-        Ok(Self { lock })
+        Ok(Self {
+            lock: RwLock::new(file),
+        })
     }
 
-    /// Try to acquire an exclusive lock without blocking
+    /// Acquire an exclusive write lock, blocking until available
     ///
-    /// Returns an error immediately if the lock is held.
-    pub fn try_acquire(path: &Path) -> Result<Self, ResumeError> {
-        // Ensure parent directory exists
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ResumeError::IoError(e.to_string()))?;
-        }
+    /// Returns a guard that must be held for the duration of protected work.
+    /// The lock is released when the guard is dropped.
+    pub fn write(&mut self) -> Result<RwLockWriteGuard<'_, File>, ResumeError> {
+        self.lock
+            .write()
+            .map_err(|e| ResumeError::LockError(format!("Failed to acquire lock: {e}")))
+    }
 
-        // Open/create lock file
-        let lock_path = path.with_extension("lock");
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .map_err(|e| ResumeError::LockError(format!("Failed to open lock file: {e}")))?;
-
-        let mut lock = RwLock::new(file);
-
-        // Try to acquire exclusive lock (non-blocking)
-        let _ = lock
+    /// Try to acquire an exclusive write lock without blocking
+    ///
+    /// Returns a guard if successful, or an error if the lock is held.
+    /// The lock is released when the guard is dropped.
+    pub fn try_write(&mut self) -> Result<RwLockWriteGuard<'_, File>, ResumeError> {
+        self.lock
             .try_write()
-            .map_err(|e| ResumeError::LockError(format!("Failed to acquire lock: {e}")))?;
+            .map_err(|e| ResumeError::LockError(format!("Failed to acquire lock: {e}")))
+    }
 
-        Ok(Self { lock })
+    /// Legacy API: Create lock handle and acquire write lock in one step
+    ///
+    /// Returns Self with lock already acquired. Caller must call [`write()`](Self::write)
+    /// again if they need to hold the guard beyond this function's scope.
+    #[deprecated(note = "Use ResumeLock::new() followed by write() for proper guard handling")]
+    pub fn acquire(path: &Path) -> Result<Self, ResumeError> {
+        let mut lock = Self::new(path)?;
+        // Acquire and immediately release - for backward compatibility only
+        let _ = lock.write()?;
+        Ok(lock)
+    }
+
+    /// Legacy API: Try to create lock handle and acquire write lock in one step
+    #[deprecated(note = "Use ResumeLock::new() followed by try_write() for proper guard handling")]
+    pub fn try_acquire(path: &Path) -> Result<Self, ResumeError> {
+        let mut lock = Self::new(path)?;
+        // Try to acquire and immediately release - for backward compatibility only
+        let _ = lock.try_write()?;
+        Ok(lock)
     }
 }
-
-// Lock is automatically released when ResumeLock is dropped

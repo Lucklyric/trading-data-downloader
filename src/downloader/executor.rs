@@ -7,7 +7,7 @@ use crate::downloader::config::{
 };
 use crate::downloader::progress::{DownloadItemType, ProgressState, ProgressTracker};
 use crate::downloader::{DownloadError, DownloadJob, JobProgress, JobStatus};
-use crate::fetcher::{create_fetcher, DataFetcher};
+use crate::fetcher::{create_fetcher, DataFetcher, FetcherError};
 use crate::identifier::ExchangeIdentifier;
 use crate::output::csv::{read_time_range, CsvAggTradesWriter, CsvBarsWriter, CsvFundingWriter};
 use crate::output::{AggTradesWriter, BarsWriter, FundingWriter, OutputWriter};
@@ -16,6 +16,7 @@ use crate::resume::state::ResumeState;
 use crate::shutdown::{self, SharedShutdown};
 use crate::{AggTrade, Bar, FundingRate};
 use futures_util::StreamExt;
+use indicatif::ProgressBar;
 use std::path::PathBuf;
 use tracing::{debug, error, info, warn};
 
@@ -29,7 +30,8 @@ enum WriterType {
 
 impl WriterType {
     /// Write a bar to the bars writer
-    fn write_bar(&mut self, bar: &Bar) -> Result<(), DownloadError> {
+    /// Returns `Ok(true)` if bar was written, `Ok(false)` if duplicate was skipped
+    fn write_bar(&mut self, bar: &Bar) -> Result<bool, DownloadError> {
         match self {
             WriterType::Bars(writer) => writer
                 .write_bar(bar)
@@ -113,7 +115,9 @@ impl DownloadExecutor {
     /// Create a new download executor with resume capability
     pub fn new_with_resume<P: Into<PathBuf>>(resume_dir: P) -> Self {
         let resume_dir = resume_dir.into();
-        std::fs::create_dir_all(&resume_dir).ok();
+        if let Err(e) = std::fs::create_dir_all(&resume_dir) {
+            warn!(error = %e, path = %resume_dir.display(), "Failed to create resume directory");
+        }
 
         Self {
             resume_dir: Some(resume_dir),
@@ -204,6 +208,15 @@ impl DownloadExecutor {
                 Ok(None)
             }
             Err(e) => {
+                // Handle schema version mismatch as a clear error (T044/F033)
+                if let crate::resume::state::ResumeError::SchemaVersionMismatch { expected, found } = &e {
+                    return Err(DownloadError::IncompatibleResumeState {
+                        expected: expected.clone(),
+                        found: found.clone(),
+                        path: path.display().to_string(),
+                    });
+                }
+                // Other errors (IO, deserialization) - warn and start fresh
                 warn!(error = %e, "Failed to load resume state, starting fresh");
                 Ok(None)
             }
@@ -346,9 +359,14 @@ impl DownloadExecutor {
     }
 
     /// Execute bars download job (T076, T168)
+    ///
+    /// # Arguments
+    /// * `job` - The download job specification
+    /// * `progress_bar` - Optional indicatif ProgressBar for visual updates
     pub async fn execute_bars_job(
         &self,
         mut job: DownloadJob,
+        progress_bar: Option<ProgressBar>,
     ) -> Result<JobProgress, DownloadError> {
         // Create structured logging span for download operation
         let span = tracing::info_span!(
@@ -444,6 +462,7 @@ impl DownloadExecutor {
                 &mut start_time,
                 interval,
                 &mut progress_state,
+                progress_bar.as_ref(),
             )
             .await;
 
@@ -658,6 +677,18 @@ impl DownloadExecutor {
     }
 
     /// Download bars with retry logic - type-safe version for bars
+    ///
+    /// # Sequential Stream Processing (T050/F030)
+    ///
+    /// Items are processed sequentially from the stream rather than in parallel for these reasons:
+    /// 1. **Ordering**: Bars must be written to CSV in chronological order for data integrity
+    /// 2. **Checkpointing**: Resume state tracks the last processed timestamp, which requires
+    ///    sequential advancement to avoid gaps on restart
+    /// 3. **Rate limiting**: The rate limiter and backoff logic depend on processing one
+    ///    request at a time to respect exchange API limits
+    /// 4. **Memory efficiency**: Sequential processing with streaming avoids loading all
+    ///    data into memory at once
+    #[allow(clippy::too_many_arguments)]
     async fn download_bars_with_retry(
         &self,
         job: &mut DownloadJob,
@@ -666,11 +697,15 @@ impl DownloadExecutor {
         start_time: &mut i64,
         interval: crate::Interval,
         progress_state: &mut ProgressState,
+        progress_bar: Option<&ProgressBar>,
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
-        let mut last_error = None;
+        let mut last_error: Option<FetcherError>;
 
         loop {
+            // Reset last_error at start of each attempt so successful retries complete properly
+            last_error = None;
+
             if self.shutdown_requested() {
                 return self.abort_due_to_shutdown(job).await;
             }
@@ -684,14 +719,22 @@ impl DownloadExecutor {
                         match result {
                             Ok(bar) => {
                                 // Write bar using safe enum dispatch
-                                writer.write_bar(&bar)?;
+                                let was_written = writer.write_bar(&bar)?;
                                 job.progress.downloaded_bars += 1;
-                                job.progress.written_bars += 1;
+                                if was_written {
+                                    job.progress.written_bars += 1;
+                                }
 
                                 let timestamp = bar.close_time;
                                 job.progress.current_position = Some(timestamp);
 
                                 progress_state.update(1, Some(timestamp));
+
+                                // Update visual progress bar if provided
+                                if let Some(pb) = progress_bar {
+                                    pb.inc(1);
+                                }
+
                                 if progress_state.should_emit_update() {
                                     info!(
                                         symbol = %job.symbol,
@@ -777,9 +820,12 @@ impl DownloadExecutor {
         progress_state: &mut ProgressState,
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
-        let mut last_error = None;
+        let mut last_error: Option<FetcherError>;
 
         loop {
+            // Reset last_error at start of each attempt so successful retries complete properly
+            last_error = None;
+
             if self.shutdown_requested() {
                 return self.abort_due_to_shutdown(job).await;
             }
@@ -881,9 +927,12 @@ impl DownloadExecutor {
         progress_state: &mut ProgressState,
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
-        let mut last_error = None;
+        let mut last_error: Option<FetcherError>;
 
         loop {
+            // Reset last_error at start of each attempt so successful retries complete properly
+            last_error = None;
+
             if self.shutdown_requested() {
                 return self.abort_due_to_shutdown(job).await;
             }

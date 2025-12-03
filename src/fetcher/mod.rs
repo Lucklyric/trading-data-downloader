@@ -115,6 +115,14 @@ pub enum FetcherError {
     /// Unsupported exchange
     #[error("unsupported exchange: {0}")]
     UnsupportedExchange(String),
+
+    /// Invalid timestamp (F013)
+    #[error("invalid timestamp: {0}")]
+    InvalidTimestamp(i64),
+
+    /// Date overflow during iteration (F014)
+    #[error("date overflow: cannot advance from {0}")]
+    DateOverflow(String),
 }
 
 /// Result type for fetcher operations

@@ -101,4 +101,18 @@ pub enum DownloadError {
     /// Output error
     #[error("output error: {0}")]
     OutputError(String),
+
+    /// Incompatible resume state schema version (T044/F033)
+    ///
+    /// The resume state file uses an incompatible schema version.
+    /// Delete the file or use --force to start a fresh download.
+    #[error("incompatible resume state: expected schema {expected}, found {found}. Delete the state file at {path} to start fresh.")]
+    IncompatibleResumeState {
+        /// Expected schema version
+        expected: String,
+        /// Found schema version
+        found: String,
+        /// Path to the incompatible state file
+        path: String,
+    },
 }

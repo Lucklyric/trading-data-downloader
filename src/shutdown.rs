@@ -15,8 +15,16 @@ pub type SharedShutdown = Arc<ShutdownCoordinator>;
 static GLOBAL_SHUTDOWN: OnceCell<SharedShutdown> = OnceCell::new();
 
 /// Register a global shutdown handle so subsystems can discover it lazily.
-pub fn set_global_shutdown(handle: SharedShutdown) {
-    let _ = GLOBAL_SHUTDOWN.set(handle);
+///
+/// Returns `true` if the handle was successfully registered, `false` if already set.
+pub fn set_global_shutdown(handle: SharedShutdown) -> bool {
+    match GLOBAL_SHUTDOWN.set(handle) {
+        Ok(()) => true,
+        Err(_) => {
+            // Already set - this is expected if called multiple times
+            false
+        }
+    }
 }
 
 /// Retrieve the registered global shutdown handle, if available.

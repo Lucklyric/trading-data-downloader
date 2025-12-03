@@ -26,6 +26,12 @@ pub enum SymbolFormat {
 /// This struct encapsulates all market-specific constants that differ between
 /// USDT-margined (FAPI) and COIN-margined (DAPI) futures markets.
 ///
+/// # Rate Limit Weights (F037)
+///
+/// Each endpoint has an associated weight that must be passed to the rate limiter.
+/// Binance enforces 2400 weight per minute per IP. Using incorrect weights can
+/// lead to HTTP 429 errors and potential IP bans.
+///
 /// # Examples
 ///
 /// ```
@@ -53,6 +59,18 @@ pub struct BinanceMarketConfig {
 
     /// Symbol naming format for this market
     pub symbol_format: SymbolFormat,
+
+    /// Rate limit weight for klines endpoint (F037)
+    pub klines_weight: u32,
+
+    /// Rate limit weight for aggTrades endpoint (F037)
+    pub aggtrades_weight: u32,
+
+    /// Rate limit weight for fundingRate endpoint (F037)
+    pub funding_weight: u32,
+
+    /// Rate limit weight for exchangeInfo endpoint (F037)
+    pub exchange_info_weight: u32,
 }
 
 /// T226: USDT-margined futures configuration (FAPI)
@@ -61,6 +79,12 @@ pub struct BinanceMarketConfig {
 /// - Base URL: <https://fapi.binance.com>
 /// - Endpoints: /fapi/v1/*
 /// - Symbol format: Perpetual (e.g., BTCUSDT)
+///
+/// Rate limit weights from Binance API documentation (F037):
+/// - klines: 5 weight
+/// - aggTrades: 20 weight
+/// - fundingRate: 1 weight
+/// - exchangeInfo: 10 weight
 pub const USDT_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
     base_url: "https://fapi.binance.com",
     klines_endpoint: "/fapi/v1/klines",
@@ -68,6 +92,10 @@ pub const USDT_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
     funding_endpoint: "/fapi/v1/fundingRate",
     exchange_info_endpoint: "/fapi/v1/exchangeInfo",
     symbol_format: SymbolFormat::Perpetual,
+    klines_weight: 5,
+    aggtrades_weight: 20,
+    funding_weight: 1,
+    exchange_info_weight: 10,
 };
 
 /// T227: COIN-margined futures configuration (DAPI)
@@ -76,6 +104,12 @@ pub const USDT_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
 /// - Base URL: <https://dapi.binance.com>
 /// - Endpoints: /dapi/v1/*
 /// - Symbol format: CoinPerpetual (e.g., BTCUSD_PERP)
+///
+/// Rate limit weights from Binance API documentation (F037):
+/// - klines: 5 weight
+/// - aggTrades: 20 weight
+/// - fundingRate: 1 weight
+/// - exchangeInfo: 10 weight
 pub const COIN_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
     base_url: "https://dapi.binance.com",
     klines_endpoint: "/dapi/v1/klines",
@@ -83,6 +117,10 @@ pub const COIN_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
     funding_endpoint: "/dapi/v1/fundingRate",
     exchange_info_endpoint: "/dapi/v1/exchangeInfo",
     symbol_format: SymbolFormat::CoinPerpetual,
+    klines_weight: 5,
+    aggtrades_weight: 20,
+    funding_weight: 1,
+    exchange_info_weight: 10,
 };
 
 impl BinanceMarketConfig {

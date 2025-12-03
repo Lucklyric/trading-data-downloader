@@ -29,7 +29,7 @@ async fn test_binance_http_client_get_request() {
     // This endpoint has low weight and should always succeed
     let params = vec![];
     let result: Result<serde_json::Value, _> =
-        http_client.get("/fapi/v1/exchangeInfo", &params).await;
+        http_client.get("/fapi/v1/exchangeInfo", &params, 10).await;
 
     // Verify the request succeeded
     assert!(result.is_ok(), "GET request should succeed");
@@ -66,7 +66,7 @@ async fn test_binance_http_client_retry_logic() {
 
     // Attempt GET request - should fail after retries
     let params = vec![];
-    let result: Result<serde_json::Value, _> = http_client.get("/api/endpoint", &params).await;
+    let result: Result<serde_json::Value, _> = http_client.get("/api/endpoint", &params, 1).await;
 
     // Verify the request failed after retries
     assert!(result.is_err(), "Request should fail on network error");
@@ -103,7 +103,7 @@ async fn test_binance_http_client_weight_tracking() {
     // Make a real request to Binance API
     let params = vec![];
     let result: Result<serde_json::Value, _> =
-        http_client.get("/fapi/v1/exchangeInfo", &params).await;
+        http_client.get("/fapi/v1/exchangeInfo", &params, 10).await;
 
     // Verify the request succeeded
     assert!(
@@ -115,7 +115,7 @@ async fn test_binance_http_client_weight_tracking() {
     // (with generous limits, requests should succeed)
     for _ in 0..3 {
         let result: Result<serde_json::Value, _> =
-            http_client.get("/fapi/v1/exchangeInfo", &params).await;
+            http_client.get("/fapi/v1/exchangeInfo", &params, 10).await;
 
         assert!(result.is_ok(), "Subsequent requests should succeed");
     }
@@ -140,7 +140,7 @@ async fn test_binance_http_client_with_params() {
     ];
 
     let result: Result<serde_json::Value, _> =
-        http_client.get("/fapi/v1/fundingRate", &params).await;
+        http_client.get("/fapi/v1/fundingRate", &params, 1).await;
 
     // Verify the request succeeded
     assert!(result.is_ok(), "GET request with params should succeed");

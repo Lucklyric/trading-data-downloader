@@ -2,16 +2,25 @@
 
 use crate::{AggTrade, Bar, FundingRate};
 use csv::{ReaderBuilder, StringRecord, Writer};
+use lru::LruCache;
 use serde::Serialize;
-use std::collections::HashSet;
 use std::io::BufWriter;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use tempfile::{Builder as TempBuilder, NamedTempFile};
 use tracing::{debug, info, warn};
 
 use super::{AggTradesWriter, BarsWriter, FundingWriter, OutputError, OutputResult, OutputWriter};
 
+/// Default write buffer size in bytes.
+/// 8KB balances memory usage vs syscall overhead for typical CSV row sizes (~100-200 bytes).
+/// Larger buffers reduce write syscalls but increase memory per open file.
 const DEFAULT_BUFFER_SIZE: usize = 8192; // 8KB buffer
+
+/// Maximum number of entries in deduplication cache to bound memory usage.
+/// 100K entries at ~8 bytes per key = ~800KB memory per writer.
+/// Sufficient for ~2.5 months of 1-minute bars per symbol (43,200 bars/month).
+const DEFAULT_DEDUP_CAPACITY: usize = 100_000;
 
 /// CSV record for OHLCV bar
 #[derive(Debug, Serialize)]
@@ -54,8 +63,8 @@ pub struct CsvBarsWriter {
     // Final path we will atomically persist to
     final_path: PathBuf,
     bars_written: u64,
-    // P0-2: in-memory dedup by open_time
-    seen_timestamps: HashSet<i64>,
+    // P0-2: bounded in-memory dedup by open_time (LRU cache to limit memory)
+    seen_timestamps: LruCache<i64, ()>,
     duplicates_skipped: u64,
 }
 
@@ -143,10 +152,12 @@ impl CsvBarsWriter {
             "CSV bars writer created successfully (atomic temp file)"
         );
 
-        // P0-2: preload dedup set from existing file
-        let mut seen = HashSet::new();
+        // P0-2: preload dedup cache from existing file (bounded to prevent OOM)
+        let cap = NonZeroUsize::new(DEFAULT_DEDUP_CAPACITY)
+            .expect("DEFAULT_DEDUP_CAPACITY must be non-zero");
+        let mut seen = LruCache::new(cap);
         if path.exists() {
-            if let Err(e) = load_existing_bars_keys(path, &mut seen) {
+            if let Err(e) = load_existing_bars_keys_lru(path, &mut seen) {
                 warn!(error = %e, "Failed to preload dedup keys from bars file");
             }
         }
@@ -168,8 +179,9 @@ impl CsvBarsWriter {
 
 impl BarsWriter for CsvBarsWriter {
     /// Write a single bar (T072, T169)
-    fn write_bar(&mut self, bar: &Bar) -> OutputResult<()> {
-        // P0-2: dedup by open_time
+    /// Returns `Ok(true)` if bar was written, `Ok(false)` if duplicate was skipped
+    fn write_bar(&mut self, bar: &Bar) -> OutputResult<bool> {
+        // P0-2: dedup by open_time using LRU cache
         if self.seen_timestamps.contains(&bar.open_time) {
             self.duplicates_skipped += 1;
             debug!(
@@ -177,9 +189,9 @@ impl BarsWriter for CsvBarsWriter {
                 duplicates = self.duplicates_skipped,
                 "Skipping duplicate bar"
             );
-            return Ok(());
+            return Ok(false); // Duplicate skipped
         }
-        self.seen_timestamps.insert(bar.open_time);
+        self.seen_timestamps.put(bar.open_time, ());
 
         let record = BarRecord::from(bar);
 
@@ -195,7 +207,7 @@ impl BarsWriter for CsvBarsWriter {
             debug!(bars_written = self.bars_written, "Periodic flush completed");
         }
 
-        Ok(())
+        Ok(true) // Bar was written
     }
 }
 
@@ -274,8 +286,8 @@ pub struct CsvAggTradesWriter {
     writer: Writer<BufWriter<NamedTempFile>>,
     final_path: PathBuf,
     trades_written: u64,
-    /// HashSet for deduplication by agg_trade_id (T125)
-    seen_ids: HashSet<i64>,
+    /// LRU cache for bounded deduplication by agg_trade_id (T125)
+    seen_ids: LruCache<i64, ()>,
     duplicates_skipped: u64,
 }
 
@@ -355,10 +367,12 @@ impl CsvAggTradesWriter {
             "CSV aggTrades writer created (atomic temp file)"
         );
 
-        // P0-2: preload dedup IDs
-        let mut seen_ids = HashSet::new();
+        // P0-2: preload dedup IDs (bounded to prevent OOM)
+        let cap = NonZeroUsize::new(DEFAULT_DEDUP_CAPACITY)
+            .expect("DEFAULT_DEDUP_CAPACITY must be non-zero");
+        let mut seen_ids = LruCache::new(cap);
         if path.exists() {
-            if let Err(e) = load_existing_aggtrade_ids(path, &mut seen_ids) {
+            if let Err(e) = load_existing_aggtrade_ids_lru(path, &mut seen_ids) {
                 warn!(error = %e, "Failed to preload dedup IDs from aggtrades");
             }
         }
@@ -398,7 +412,7 @@ impl AggTradesWriter for CsvAggTradesWriter {
         }
 
         // Mark this ID as seen
-        self.seen_ids.insert(trade.agg_trade_id);
+        self.seen_ids.put(trade.agg_trade_id, ());
 
         let record = AggTradeRecord::from(trade);
 
@@ -491,7 +505,7 @@ pub struct CsvFundingWriter {
     final_path: PathBuf,
     rates_written: u64,
     buffer_size: usize,
-    seen_timestamps: HashSet<i64>,
+    seen_timestamps: LruCache<i64, ()>,
     duplicates_skipped: u64,
 }
 
@@ -567,10 +581,12 @@ impl CsvFundingWriter {
             existing_rows
         );
 
-        // preload dedup keys
-        let mut seen = HashSet::new();
+        // P0-2: preload dedup keys (bounded to prevent OOM)
+        let cap = NonZeroUsize::new(DEFAULT_DEDUP_CAPACITY)
+            .expect("DEFAULT_DEDUP_CAPACITY must be non-zero");
+        let mut seen = LruCache::new(cap);
         if path.exists() {
-            if let Err(e) = load_existing_funding_keys(path, &mut seen) {
+            if let Err(e) = load_existing_funding_keys_lru(path, &mut seen) {
                 warn!(error = %e, "Failed to preload dedup keys from funding CSV");
             }
         }
@@ -608,7 +624,7 @@ impl FundingWriter for CsvFundingWriter {
             );
             return Ok(());
         }
-        self.seen_timestamps.insert(rate.funding_time);
+        self.seen_timestamps.put(rate.funding_time, ());
 
         let record = FundingRateRecord::from(rate);
 
@@ -689,7 +705,9 @@ pub fn cleanup_stale_temp_files_for_target<P: AsRef<Path>>(target: P) -> OutputR
                 .path();
             if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
                 if name.starts_with(stem) && name.ends_with(".tmp") {
-                    let _ = std::fs::remove_file(path);
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        debug!(error = %e, path = %path.display(), "Failed to remove stale temp file");
+                    }
                 }
             }
         }
@@ -790,8 +808,8 @@ fn copy_existing_csv_to_writer<W: std::io::Write>(
     Ok(copied)
 }
 
-/// Load existing bar keys (open_time) from CSV into HashSet
-fn load_existing_bars_keys(path: &Path, out: &mut HashSet<i64>) -> OutputResult<()> {
+/// Load existing bar keys (open_time) from CSV into LruCache (P0-2: bounded memory)
+fn load_existing_bars_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
     if !path.exists() {
         return Ok(());
     }
@@ -810,14 +828,14 @@ fn load_existing_bars_keys(path: &Path, out: &mut HashSet<i64>) -> OutputResult<
     for rec in rdr.records() {
         let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
         if let Some(ts) = parse_i64(rec.get(ts_index)) {
-            out.insert(ts);
+            out.put(ts, ());
         }
     }
     Ok(())
 }
 
-/// Load existing aggtrade IDs from CSV into HashSet
-fn load_existing_aggtrade_ids(path: &Path, out: &mut HashSet<i64>) -> OutputResult<()> {
+/// Load existing aggtrade IDs from CSV into LruCache (P0-2: bounded memory)
+fn load_existing_aggtrade_ids_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
     if !path.exists() {
         return Ok(());
     }
@@ -836,14 +854,14 @@ fn load_existing_aggtrade_ids(path: &Path, out: &mut HashSet<i64>) -> OutputResu
     for rec in rdr.records() {
         let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
         if let Some(id) = parse_i64(rec.get(id_index)) {
-            out.insert(id);
+            out.put(id, ());
         }
     }
     Ok(())
 }
 
-/// Load existing funding keys (funding_time) from CSV into HashSet
-fn load_existing_funding_keys(path: &Path, out: &mut HashSet<i64>) -> OutputResult<()> {
+/// Load existing funding keys (funding_time) from CSV into LruCache (P0-2: bounded memory)
+fn load_existing_funding_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
     if !path.exists() {
         return Ok(());
     }
@@ -862,7 +880,7 @@ fn load_existing_funding_keys(path: &Path, out: &mut HashSet<i64>) -> OutputResu
     for rec in rdr.records() {
         let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
         if let Some(ts) = parse_i64(rec.get(ts_index)) {
-            out.insert(ts);
+            out.put(ts, ());
         }
     }
     Ok(())

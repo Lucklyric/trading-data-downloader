@@ -531,6 +531,23 @@ trading-data-downloader download bars \
   ...
 ```
 
+### Schema Version Mismatch
+
+If you see an error like:
+```
+incompatible resume state: expected schema 1.0.0, found 0.9.0. Delete the state file at ./data/.resume/btcusdt.json to start fresh.
+```
+
+This means the resume state file was created by an older version of the tool with an incompatible format.
+
+**Solution:** Delete the state file mentioned in the error message and restart the download:
+```bash
+rm ./data/.resume/btcusdt.json
+trading-data-downloader download bars --resume on ...
+```
+
+Or use `--resume reset` to clear all resume state automatically.
+
 ### Network Timeouts
 
 For unstable connections:

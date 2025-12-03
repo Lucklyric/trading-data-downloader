@@ -46,13 +46,30 @@ pub struct YearMonth {
 
 impl YearMonth {
     /// Create YearMonth from millisecond timestamp
+    ///
+    /// # Fallback Behavior (T040/F029D)
+    ///
+    /// If the timestamp is invalid (e.g., out of range for DateTime), this function
+    /// falls back to the current UTC time. This is a defensive measure since:
+    /// - All production callers pass valid timestamps from API responses
+    /// - Invalid timestamps would indicate a bug in upstream data
+    ///
+    /// For callers who need explicit error handling, use [`try_from_timestamp_ms`] instead.
     pub fn from_timestamp_ms(timestamp_ms: i64) -> Self {
-        let dt = DateTime::from_timestamp_millis(timestamp_ms).unwrap_or_else(Utc::now);
+        Self::try_from_timestamp_ms(timestamp_ms).unwrap_or_else(|_| Self::now())
+    }
 
-        Self {
+    /// Create YearMonth from millisecond timestamp, returning error on invalid timestamp
+    ///
+    /// Returns [`OutputError::InvalidTimestamp`] if the timestamp cannot be converted.
+    pub fn try_from_timestamp_ms(timestamp_ms: i64) -> super::OutputResult<Self> {
+        let dt = DateTime::from_timestamp_millis(timestamp_ms)
+            .ok_or(super::OutputError::InvalidTimestamp(timestamp_ms))?;
+
+        Ok(Self {
             year: dt.year(),
             month: dt.month(),
-        }
+        })
     }
 
     /// Get current YearMonth
@@ -78,8 +95,12 @@ impl YearMonth {
             }
         };
 
-        let date = NaiveDate::from_ymd_opt(next.year, next.month, 1).expect("Invalid year/month");
-        let datetime = date.and_hms_opt(0, 0, 0).expect("Invalid time");
+        // SAFETY: next.month is always 1-12 (validated above), day 1 is always valid.
+        // expect() is safe here as input values are constrained by the struct logic.
+        let date =
+            NaiveDate::from_ymd_opt(next.year, next.month, 1).expect("valid month 1-12, day 1");
+        // SAFETY: 00:00:00 is always a valid time.
+        let datetime = date.and_hms_opt(0, 0, 0).expect("midnight is always valid");
         datetime.and_utc().timestamp_millis()
     }
 }
@@ -119,13 +140,19 @@ impl OutputPathBuilder {
     /// * `root_dir` - Root data directory (e.g., "data" or "/var/data")
     /// * `identifier` - Exchange identifier (e.g., "BINANCE:BTC/USDT:USDT")
     /// * `symbol` - Trading symbol (e.g., "BTCUSDT")
+    ///
+    /// # Security (F039)
+    ///
+    /// Symbol is sanitized to prevent path traversal attacks.
+    /// Characters `/`, `\`, `:`, `..` are replaced with `_`.
     pub fn new(root_dir: PathBuf, identifier: &str, symbol: &str) -> Self {
         let venue = Self::extract_venue(identifier);
+        let sanitized_symbol = sanitize_symbol(symbol);
 
         Self {
             root_dir,
             venue,
-            symbol: symbol.to_string(),
+            symbol: sanitized_symbol,
             data_type: DataType::Bars,
             interval: None,
             month: YearMonth::now(),
@@ -232,6 +259,18 @@ impl OutputPathBuilder {
 /// Converts to lowercase
 fn sanitize_venue(name: &str) -> String {
     name.replace(['/', '\\', ':', '-'], "_").to_lowercase()
+}
+
+/// Sanitize symbol name for filesystem safety (F039)
+///
+/// Prevents path traversal attacks by replacing dangerous characters:
+/// - `/`, `\`, `:` → `_` (directory separators)
+/// - `..` → `__` (parent directory reference)
+///
+/// Preserves case (symbols are case-sensitive on exchanges).
+fn sanitize_symbol(name: &str) -> String {
+    name.replace("..", "__")
+        .replace(['/', '\\', ':'], "_")
 }
 
 /// Month range with start/end timestamps

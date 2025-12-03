@@ -184,7 +184,11 @@ impl BinanceFuturesCoinFetcher {
         let params: Vec<(&str, String)> = vec![];
         let body: Value = self
             .http_client
-            .get(COIN_FUTURES_CONFIG.exchange_info_endpoint, &params)
+            .get(
+                COIN_FUTURES_CONFIG.exchange_info_endpoint,
+                &params,
+                COIN_FUTURES_CONFIG.exchange_info_weight,
+            )
             .await?;
 
         let symbols_array = body
@@ -239,7 +243,11 @@ impl BinanceFuturesCoinFetcher {
 
         let klines: Vec<Value> = self
             .http_client
-            .get(COIN_FUTURES_CONFIG.klines_endpoint, &params)
+            .get(
+                COIN_FUTURES_CONFIG.klines_endpoint,
+                &params,
+                COIN_FUTURES_CONFIG.klines_weight,
+            )
             .await?;
 
         let bars = BinanceParser::parse_klines(klines)?;
@@ -277,7 +285,11 @@ impl BinanceFuturesCoinFetcher {
 
         let trades_json: Vec<Value> = self
             .http_client
-            .get(COIN_FUTURES_CONFIG.aggtrades_endpoint, &params)
+            .get(
+                COIN_FUTURES_CONFIG.aggtrades_endpoint,
+                &params,
+                COIN_FUTURES_CONFIG.aggtrades_weight,
+            )
             .await?;
 
         let trades = BinanceParser::parse_aggtrades(trades_json)?;
@@ -315,7 +327,11 @@ impl BinanceFuturesCoinFetcher {
 
         let rates_json: Vec<Value> = self
             .http_client
-            .get(COIN_FUTURES_CONFIG.funding_endpoint, &params)
+            .get(
+                COIN_FUTURES_CONFIG.funding_endpoint,
+                &params,
+                COIN_FUTURES_CONFIG.funding_weight,
+            )
             .await?;
 
         let funding_rates = BinanceParser::parse_funding_rates(rates_json)?;

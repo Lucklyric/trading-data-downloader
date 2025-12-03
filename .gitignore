@@ -40,4 +40,5 @@ Thumbs.db
 # Added by cargo
 
 /target
-btcusdt_1m.csv
+.resume
+data/

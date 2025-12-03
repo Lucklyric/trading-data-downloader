@@ -363,7 +363,10 @@ fn test_filename_funding_includes_month() {
 }
 
 /// T060: Test multi-month download creates separate files
+/// Requires network access to Binance API - run with `cargo test -- --ignored`
+/// Pure logic for month splitting is tested in tests/unit/output_path.rs
 #[test]
+#[ignore]
 fn test_multi_month_creates_separate_files() {
     let temp_dir = TempDir::new().unwrap();
 

@@ -201,11 +201,49 @@ async fn test_aggtrades_download_resume() {
     }
 }
 
-/// T110: Test for 1-hour time window constraint enforcement
-/// This test is in the contract tests file (tests/contract/binance_futures_usdt_api.rs)
-/// but we also test it at the integration level here
+/// T110: Test for 1-hour time window chunking logic (pure function test)
+/// Tests the chunking algorithm without network calls
+#[test]
+fn test_aggtrades_one_hour_window_chunking() {
+    use trading_data_downloader::fetcher::binance_futures_usdt::{
+        split_into_one_hour_chunks, ONE_HOUR_MS,
+    };
+
+    // Test 2-hour range splits into 2 chunks
+    let start_time = 0i64;
+    let end_time = 2 * ONE_HOUR_MS;
+    let chunks = split_into_one_hour_chunks(start_time, end_time);
+
+    assert_eq!(chunks.len(), 2, "2-hour range should produce 2 chunks");
+    assert_eq!(chunks[0], (0, ONE_HOUR_MS));
+    assert_eq!(chunks[1], (ONE_HOUR_MS, 2 * ONE_HOUR_MS));
+
+    // Test partial hour at the end
+    let end_time_partial = ONE_HOUR_MS + 30 * 60 * 1000; // 1.5 hours
+    let chunks = split_into_one_hour_chunks(0, end_time_partial);
+
+    assert_eq!(chunks.len(), 2, "1.5-hour range should produce 2 chunks");
+    assert_eq!(chunks[0], (0, ONE_HOUR_MS));
+    assert_eq!(chunks[1], (ONE_HOUR_MS, end_time_partial));
+
+    // Test less than 1 hour
+    let end_time_short = 30 * 60 * 1000; // 30 minutes
+    let chunks = split_into_one_hour_chunks(0, end_time_short);
+
+    assert_eq!(chunks.len(), 1, "30-min range should produce 1 chunk");
+    assert_eq!(chunks[0], (0, end_time_short));
+
+    // Test exactly 1 hour
+    let chunks = split_into_one_hour_chunks(0, ONE_HOUR_MS);
+    assert_eq!(chunks.len(), 1, "Exactly 1-hour range should produce 1 chunk");
+    assert_eq!(chunks[0], (0, ONE_HOUR_MS));
+}
+
+/// T110: Live integration test for 1-hour time window constraint enforcement
+/// Requires network access to Binance API - run with `cargo test -- --ignored`
 #[tokio::test]
-async fn test_aggtrades_one_hour_window_chunking() {
+#[ignore]
+async fn test_aggtrades_one_hour_window_chunking_live() {
     use futures_util::StreamExt;
     use trading_data_downloader::fetcher::binance_futures_usdt::BinanceFuturesUsdtFetcher;
     use trading_data_downloader::fetcher::DataFetcher;

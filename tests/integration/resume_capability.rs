@@ -240,14 +240,17 @@ fn test_resume_lock_basic_acquire_and_release() {
     );
     state.save(&state_path).unwrap();
 
-    // Acquire lock
-    let lock1 = ResumeLock::acquire(&state_path).unwrap();
+    // Acquire lock using new API - must hold the guard
+    let mut lock1 = ResumeLock::new(&state_path).unwrap();
+    let _guard1 = lock1.write().unwrap();
 
-    // Drop the lock
+    // Drop the guard to release the lock
+    drop(_guard1);
     drop(lock1);
 
     // Now acquiring should succeed
-    let _lock2 = ResumeLock::acquire(&state_path).unwrap();
+    let mut lock2 = ResumeLock::new(&state_path).unwrap();
+    let _guard2 = lock2.write().unwrap();
 }
 
 #[test]

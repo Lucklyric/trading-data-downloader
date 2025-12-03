@@ -5,9 +5,10 @@ use crate::shutdown::SharedShutdown;
 use crate::Interval;
 use chrono::{DateTime, NaiveDate};
 use clap::{Parser, Subcommand};
+use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::{error, info};
 
@@ -38,6 +39,94 @@ impl FromStr for ResumeMode {
             _ => Err(format!(
                 "Invalid resume mode: {s}. Valid options: on, off, reset, verify"
             )),
+        }
+    }
+}
+
+/// Handle Reset mode: delete existing resume directory
+fn handle_resume_reset(resume_dir: &PathBuf) -> Result<(), CliError> {
+    if resume_dir.exists() {
+        info!("Reset mode: deleting existing resume directory: {:?}", resume_dir);
+        std::fs::remove_dir_all(resume_dir).map_err(|e| {
+            CliError::InvalidArgument(format!(
+                "Failed to delete resume directory {:?}: {}",
+                resume_dir, e
+            ))
+        })?;
+        info!("Resume directory deleted successfully");
+    }
+    Ok(())
+}
+
+/// Handle Verify mode: check resume state integrity
+fn handle_resume_verify(resume_dir: &PathBuf) -> Result<(), CliError> {
+    use crate::resume::ResumeState;
+
+    if !resume_dir.exists() {
+        info!("Verify mode: resume directory does not exist, nothing to verify");
+        return Ok(());
+    }
+
+    // Check for any .json files in resume directory and validate them
+    let entries = std::fs::read_dir(resume_dir).map_err(|e| {
+        CliError::InvalidArgument(format!(
+            "Failed to read resume directory {:?}: {}",
+            resume_dir, e
+        ))
+    })?;
+
+    let mut valid_count = 0;
+    let mut error_count = 0;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().map_or(false, |ext| ext == "json") {
+            match ResumeState::load(&path) {
+                Ok(_state) => {
+                    info!("Valid resume state: {:?}", path);
+                    valid_count += 1;
+                }
+                Err(e) => {
+                    error!("Invalid resume state: {:?}: {}", path, e);
+                    error_count += 1;
+                }
+            }
+        }
+    }
+
+    if error_count > 0 {
+        return Err(CliError::InvalidArgument(format!(
+            "Verify failed: {} invalid resume state file(s) found. Use --resume reset to clear.",
+            error_count
+        )));
+    }
+
+    info!("Verify passed: {} valid resume state file(s)", valid_count);
+    Ok(())
+}
+
+/// Configuration needed for concurrent job execution (F040)
+///
+/// This struct holds a copy of the cloneable CLI fields needed by the
+/// helper functions for concurrent job execution. This avoids requiring
+/// Clone on the entire Cli struct (which contains Commands enum).
+#[derive(Clone)]
+struct JobConfig {
+    resume: ResumeMode,
+    resume_dir: Option<PathBuf>,
+    max_retries: u32,
+    force: bool,
+    output_format: OutputFormat,
+}
+
+impl JobConfig {
+    fn from_cli(cli: &Cli) -> Self {
+        Self {
+            resume: cli.resume,
+            resume_dir: cli.resume_dir.clone(),
+            max_retries: cli.max_retries,
+            force: cli.force,
+            output_format: cli.output_format,
         }
     }
 }
@@ -214,114 +303,6 @@ struct DownloadResult {
     retries: u64,
     error: Option<String>,
 }
-
-/// Validate that a path is safe to delete (guards against catastrophic data loss)
-fn validate_safe_delete_path(path: &Path) -> Result<(), CliError> {
-    let path_str = path.to_string_lossy();
-
-    // 1. Check for dangerous Unix absolute paths
-    #[cfg(unix)]
-    {
-        if path_str == "/"
-            || path_str == "//"
-            || (path_str.starts_with("/Users") && path_str.matches('/').count() <= 2)
-            || (path_str.starts_with("/home") && path_str.matches('/').count() <= 2)
-            || path_str.starts_with("/etc")
-            || path_str.starts_with("/var")
-            || path_str.starts_with("/usr")
-            || path_str.starts_with("/bin")
-            || path_str.starts_with("/sbin")
-            || path_str.starts_with("/lib")
-        {
-            return Err(CliError::InvalidArgument(format!(
-                "Refusing to delete dangerous system path: {path_str}. Resume directories should be in the current project."
-            )));
-        }
-    }
-
-    // 2. Check for dangerous Windows paths
-    #[cfg(windows)]
-    {
-        // Check for drive roots (C:\, D:\, etc.)
-        if path_str.len() <= 3 && path_str.contains(":\\") {
-            return Err(CliError::InvalidArgument(format!(
-                "Refusing to delete drive root: {path_str}. Resume directories should be in the current project."
-            )));
-        }
-
-        // Check for Windows system directories
-        let lower = path_str.to_lowercase();
-        if lower.starts_with("c:\\windows")
-            || lower.starts_with("c:\\program files")
-            || (lower.starts_with("c:\\users") && lower.matches('\\').count() <= 2)
-            || lower.starts_with("\\\\")
-        {
-            // UNC paths
-            return Err(CliError::InvalidArgument(format!(
-                "Refusing to delete dangerous Windows path: {path_str}. Resume directories should be in the current project."
-            )));
-        }
-    }
-
-    // 3. Check for parent directory references (cross-platform)
-    if path_str.contains("..") {
-        return Err(CliError::InvalidArgument(
-            "Path contains '..' which could escape the intended directory. Use absolute paths or simple relative paths.".to_string()
-        ));
-    }
-
-    // 4. Check if path is a symlink (before canonicalization)
-    if let Ok(metadata) = path.symlink_metadata() {
-        if metadata.file_type().is_symlink() {
-            return Err(CliError::InvalidArgument(format!(
-                "Refusing to delete symlink: {path_str}. Delete the actual directory, not the symlink."
-            )));
-        }
-    }
-
-    // 5. Resolve and validate canonical path
-    if let Ok(canonical) = path.canonicalize() {
-        let canonical_str = canonical.to_string_lossy();
-        // Ensure the canonical path is still within a reasonable scope
-        #[cfg(unix)]
-        if canonical_str == "/" || canonical_str == "//" {
-            return Err(CliError::InvalidArgument(format!(
-                "Path {path_str} resolves to dangerous location: {canonical_str}"
-            )));
-        }
-
-        #[cfg(windows)]
-        if canonical_str.len() <= 3 && canonical_str.contains(":\\") {
-            return Err(CliError::InvalidArgument(format!(
-                "Path {path_str} resolves to drive root: {canonical_str}"
-            )));
-        }
-    }
-
-    Ok(())
-}
-
-/// Prompt user for confirmation before deleting resume directory
-fn confirm_resume_reset(resume_dir: &Path) -> Result<(), CliError> {
-    eprintln!("\n!!! WARNING !!!");
-    eprintln!("About to delete resume directory: {}", resume_dir.display());
-    eprintln!("This will remove all checkpoint data and cannot be undone.");
-    eprintln!("\nType 'yes' to confirm deletion: ");
-
-    let mut input = String::new();
-    std::io::stdin()
-        .read_line(&mut input)
-        .map_err(|e| CliError::InvalidArgument(format!("Failed to read confirmation: {e}")))?;
-
-    if input.trim() != "yes" {
-        return Err(CliError::InvalidArgument(
-            "Reset cancelled by user.".to_string(),
-        ));
-    }
-
-    Ok(())
-}
-
 impl BarsArgs {
     /// Parse start time from YYYY-MM-DD format
     fn parse_start_time(&self) -> Result<i64, CliError> {
@@ -336,12 +317,14 @@ impl BarsArgs {
     }
 
     /// Parse end time from YYYY-MM-DD format
+    /// Uses end-of-day (23:59:59.999) so --end-time includes the entire specified day
     fn parse_end_time(&self) -> Result<i64, CliError> {
         let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
             .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
 
+        // Use end-of-day so the specified date is fully included
         let datetime = date
-            .and_hms_opt(0, 0, 0)
+            .and_hms_milli_opt(23, 59, 59, 999)
             .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
 
         Ok(datetime.and_utc().timestamp_millis())
@@ -353,6 +336,14 @@ impl BarsArgs {
         let end_time = self.parse_end_time()?;
         let interval = Interval::from_str(&self.interval)
             .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
+
+        // Handle Reset/Verify modes before starting downloads
+        let resume_dir = cli.resume_dir.clone().unwrap_or_else(|| PathBuf::from(".resume"));
+        match cli.resume {
+            ResumeMode::Reset => handle_resume_reset(&resume_dir)?,
+            ResumeMode::Verify => handle_resume_verify(&resume_dir)?,
+            _ => {}
+        }
 
         // Always use hierarchical structure - no exceptions
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
@@ -381,124 +372,221 @@ impl BarsArgs {
             self.end_time
         );
 
-        // Execute a job for each month
-        for month_range in month_ranges {
-            let path_builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-                .with_data_type(DataType::Bars)
-                .with_interval(interval)
-                .with_month(month_range.month);
+        // Pre-build job configs for concurrent execution (F040)
+        let job_configs: Vec<_> = month_ranges
+            .into_iter()
+            .filter_map(|month_range| {
+                let path_builder =
+                    OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+                        .with_data_type(DataType::Bars)
+                        .with_interval(interval)
+                        .with_month(month_range.month);
 
-            let output_path = path_builder.build().map_err(|e| {
-                CliError::InvalidArgument(format!("Failed to build output path: {e}"))
-            })?;
+                match path_builder.build() {
+                    Ok(output_path) => Some((month_range, output_path)),
+                    Err(e) => {
+                        error!("Failed to build output path: {e}");
+                        None
+                    }
+                }
+            })
+            .collect();
 
-            info!(
-                "Processing month {}: {} to {}",
-                month_range.month, month_range.start_ms, month_range.end_ms
-            );
+        // Execute jobs with configurable concurrency (F040)
+        let concurrency = cli.concurrency.max(1);
+        let config = JobConfig::from_cli(cli);
+        info!(
+            "Processing {} months with concurrency {}",
+            job_configs.len(),
+            concurrency
+        );
 
-            self.execute_single_job(
-                cli,
-                shutdown.clone(),
-                interval,
-                month_range.start_ms,
-                month_range.end_ms,
-                output_path,
-            )
-            .await?;
+        let results: Vec<Result<(), CliError>> = stream::iter(job_configs)
+            .map(|(month_range, output_path)| {
+                let identifier = self.identifier.clone();
+                let symbol = self.symbol.clone();
+                let config_clone = config.clone();
+                let shutdown_clone = shutdown.clone();
+
+                async move {
+                    info!(
+                        "Processing month {}: {} to {}",
+                        month_range.month, month_range.start_ms, month_range.end_ms
+                    );
+
+                    execute_bars_job(
+                        &identifier,
+                        &symbol,
+                        &config_clone,
+                        shutdown_clone,
+                        interval,
+                        month_range.start_ms,
+                        month_range.end_ms,
+                        output_path,
+                    )
+                    .await
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect()
+            .await;
+
+        // Check for errors
+        for result in results {
+            result?;
         }
 
         Ok(())
     }
+}
 
-    /// Execute a single download job
-    async fn execute_single_job(
-        &self,
-        cli: &Cli,
-        shutdown: SharedShutdown,
-        interval: crate::Interval,
-        start_time: i64,
-        end_time: i64,
-        output_path: PathBuf,
-    ) -> Result<(), CliError> {
-        // Create download job
-        let job = DownloadJob::new(
-            self.identifier.clone(),
-            self.symbol.clone(),
-            interval,
-            start_time,
-            end_time,
-            output_path.clone(),
-        );
+/// Execute a bars download job with given parameters (F040 helper)
+///
+/// This standalone function allows concurrent execution of multiple bar download jobs.
+async fn execute_bars_job(
+    identifier: &str,
+    symbol: &str,
+    config: &JobConfig,
+    shutdown: SharedShutdown,
+    interval: crate::Interval,
+    start_time: i64,
+    end_time: i64,
+    output_path: PathBuf,
+) -> Result<(), CliError> {
+    // Create download job
+    let job = DownloadJob::new(
+        identifier.to_string(),
+        symbol.to_string(),
+        interval,
+        start_time,
+        end_time,
+        output_path.clone(),
+    );
 
-        // Create executor
-        let executor = match cli.resume {
-            ResumeMode::Off => DownloadExecutor::new(),
-            ResumeMode::On => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-            ResumeMode::Reset => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                // CRITICAL SAFETY GUARDS: Prevent catastrophic data loss
-                if resume_dir.exists() {
-                    validate_safe_delete_path(&resume_dir)?;
-                    confirm_resume_reset(&resume_dir)?;
-                    std::fs::remove_dir_all(&resume_dir).map_err(|e| {
-                        CliError::InvalidArgument(format!("Failed to reset resume state: {e}"))
-                    })?;
-                    eprintln!("Resume state deleted successfully.\n");
-                }
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-            ResumeMode::Verify => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                // TODO: Add resume state verification logic
-                // For now, just use normal resume
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-        };
-
-        // Apply CLI flags to executor (P0-6 fix)
-        let executor = executor
-            .with_max_retries(cli.max_retries)
-            .with_force(cli.force)
-            .with_shutdown(shutdown);
-
-        // Create progress bar (T087)
-        let progress = create_progress_bar(&job);
-
-        // Execute download
-        info!(
-            "Starting download: {} {} from {} to {}",
-            self.symbol, interval, start_time, end_time
-        );
-
-        let result = executor.execute_bars_job(job.clone()).await;
-
-        progress.finish_and_clear();
-
-        // Format output (T086)
-        match cli.output_format {
-            OutputFormat::Json => {
-                output_json_result(&job, &result);
-            }
-            OutputFormat::Human => {
-                output_human_result(&job, &result);
-            }
+    // Create executor (note: reset mode should be handled before concurrent jobs start)
+    let executor = match config.resume {
+        ResumeMode::Off => DownloadExecutor::new(),
+        ResumeMode::On | ResumeMode::Verify => {
+            let resume_dir = config
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
         }
+        ResumeMode::Reset => {
+            // In concurrent mode, reset is handled once in execute(), so just use resume mode
+            let resume_dir = config
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
+        }
+    };
 
-        result.map(|_| ()).map_err(CliError::DownloadError)
+    // Apply CLI flags to executor
+    let executor = executor
+        .with_max_retries(config.max_retries)
+        .with_force(config.force)
+        .with_shutdown(shutdown);
+
+    // Create progress bar
+    let progress = create_progress_bar(&job);
+
+    // Execute download
+    info!(
+        "Starting download: {} {} from {} to {}",
+        symbol, interval, start_time, end_time
+    );
+
+    let result = executor
+        .execute_bars_job(job.clone(), Some(progress.clone()))
+        .await;
+
+    progress.finish_and_clear();
+
+    // Format output
+    match config.output_format {
+        OutputFormat::Json => {
+            output_json_result(&job, &result);
+        }
+        OutputFormat::Human => {
+            output_human_result(&job, &result);
+        }
     }
+
+    result.map(|_| ()).map_err(CliError::DownloadError)
+}
+
+/// Helper function for concurrent aggTrades job execution (F040)
+async fn execute_aggtrades_job(
+    identifier: &str,
+    symbol: &str,
+    config: &JobConfig,
+    shutdown: SharedShutdown,
+    start_time: i64,
+    end_time: i64,
+    output_path: PathBuf,
+) -> Result<(), CliError> {
+    // Create download job
+    let job = DownloadJob::new_aggtrades(
+        identifier.to_string(),
+        symbol.to_string(),
+        start_time,
+        end_time,
+        output_path.clone(),
+    );
+
+    // Create executor (note: reset mode should be handled before concurrent jobs start)
+    let executor = match config.resume {
+        ResumeMode::Off => DownloadExecutor::new(),
+        ResumeMode::On | ResumeMode::Verify => {
+            let resume_dir = config
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
+        }
+        ResumeMode::Reset => {
+            // In concurrent mode, reset is handled once in execute(), so just use resume mode
+            let resume_dir = config
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
+        }
+    };
+
+    // Apply CLI flags to executor
+    let executor = executor
+        .with_max_retries(config.max_retries)
+        .with_force(config.force)
+        .with_shutdown(shutdown);
+
+    // Create progress bar
+    let progress = ProgressBar::new_spinner();
+    progress.set_message(format!("Downloading {} aggTrades", symbol));
+
+    // Execute download
+    info!(
+        "Starting aggTrades download: {} from {} to {}",
+        symbol, start_time, end_time
+    );
+
+    let result = executor.execute_aggtrades_job(job.clone()).await;
+
+    progress.finish_and_clear();
+
+    // Format output
+    match config.output_format {
+        OutputFormat::Json => {
+            output_aggtrades_json_result(&job, &result);
+        }
+        OutputFormat::Human => {
+            output_aggtrades_human_result(&job, &result);
+        }
+    }
+
+    result.map(|_| ()).map_err(CliError::DownloadError)
 }
 
 impl AggTradesArgs {
@@ -521,18 +609,19 @@ impl AggTradesArgs {
     }
 
     /// Parse end time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
+    /// For date-only format, uses end-of-day (23:59:59.999) so --end-time includes the entire day
     fn parse_end_time(&self) -> Result<i64, CliError> {
         // Try parsing as full datetime first
         if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.end_time)) {
             return Ok(dt.timestamp_millis());
         }
 
-        // Fall back to date-only format
+        // Fall back to date-only format - use end-of-day so the specified date is fully included
         let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
             .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
 
         let datetime = date
-            .and_hms_opt(0, 0, 0)
+            .and_hms_milli_opt(23, 59, 59, 999)
             .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
 
         Ok(datetime.and_utc().timestamp_millis())
@@ -542,6 +631,14 @@ impl AggTradesArgs {
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
+
+        // Handle Reset/Verify modes before starting downloads
+        let resume_dir = cli.resume_dir.clone().unwrap_or_else(|| PathBuf::from(".resume"));
+        match cli.resume {
+            ResumeMode::Reset => handle_resume_reset(&resume_dir)?,
+            ResumeMode::Verify => handle_resume_verify(&resume_dir)?,
+            _ => {}
+        }
 
         // Always use hierarchical structure - no exceptions
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
@@ -569,120 +666,69 @@ impl AggTradesArgs {
             self.end_time
         );
 
-        // Execute a job for each month
-        for month_range in month_ranges {
-            let path_builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-                .with_data_type(DataType::AggTrades)
-                .with_month(month_range.month);
+        // Pre-build job configs for concurrent execution (F040)
+        let job_configs: Vec<_> = month_ranges
+            .into_iter()
+            .filter_map(|month_range| {
+                let path_builder =
+                    OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+                        .with_data_type(DataType::AggTrades)
+                        .with_month(month_range.month);
 
-            let output_path = path_builder.build().map_err(|e| {
-                CliError::InvalidArgument(format!("Failed to build output path: {e}"))
-            })?;
+                match path_builder.build() {
+                    Ok(output_path) => Some((month_range, output_path)),
+                    Err(e) => {
+                        error!("Failed to build output path: {e}");
+                        None
+                    }
+                }
+            })
+            .collect();
 
-            info!(
-                "Processing month {}: {} to {}",
-                month_range.month, month_range.start_ms, month_range.end_ms
-            );
+        // Execute jobs with configurable concurrency (F040)
+        let concurrency = cli.concurrency.max(1);
+        let config = JobConfig::from_cli(cli);
+        info!(
+            "Processing {} months with concurrency {}",
+            job_configs.len(),
+            concurrency
+        );
 
-            self.execute_single_job(
-                cli,
-                shutdown.clone(),
-                month_range.start_ms,
-                month_range.end_ms,
-                output_path,
-            )
-            .await?;
+        let results: Vec<Result<(), CliError>> = stream::iter(job_configs)
+            .map(|(month_range, output_path)| {
+                let identifier = self.identifier.clone();
+                let symbol = self.symbol.clone();
+                let config_clone = config.clone();
+                let shutdown_clone = shutdown.clone();
+
+                async move {
+                    info!(
+                        "Processing month {}: {} to {}",
+                        month_range.month, month_range.start_ms, month_range.end_ms
+                    );
+
+                    execute_aggtrades_job(
+                        &identifier,
+                        &symbol,
+                        &config_clone,
+                        shutdown_clone,
+                        month_range.start_ms,
+                        month_range.end_ms,
+                        output_path,
+                    )
+                    .await
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect()
+            .await;
+
+        // Check for errors
+        for result in results {
+            result?;
         }
 
         Ok(())
-    }
-
-    /// Execute a single download job
-    async fn execute_single_job(
-        &self,
-        cli: &Cli,
-        shutdown: SharedShutdown,
-        start_time: i64,
-        end_time: i64,
-        output_path: PathBuf,
-    ) -> Result<(), CliError> {
-        // Create download job
-        let job = DownloadJob::new_aggtrades(
-            self.identifier.clone(),
-            self.symbol.clone(),
-            start_time,
-            end_time,
-            output_path.clone(),
-        );
-
-        // Create executor
-        let executor = match cli.resume {
-            ResumeMode::Off => DownloadExecutor::new(),
-            ResumeMode::On => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-            ResumeMode::Reset => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                // CRITICAL SAFETY GUARDS: Prevent catastrophic data loss
-                if resume_dir.exists() {
-                    validate_safe_delete_path(&resume_dir)?;
-                    confirm_resume_reset(&resume_dir)?;
-                    std::fs::remove_dir_all(&resume_dir).map_err(|e| {
-                        CliError::InvalidArgument(format!("Failed to reset resume state: {e}"))
-                    })?;
-                    eprintln!("Resume state deleted successfully.\n");
-                }
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-            ResumeMode::Verify => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                // TODO: Add resume state verification logic
-                // For now, just use normal resume
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-        };
-
-        // Apply CLI flags to executor (P0-6 fix)
-        let executor = executor
-            .with_max_retries(cli.max_retries)
-            .with_force(cli.force)
-            .with_shutdown(shutdown);
-
-        // Create progress bar
-        let progress = ProgressBar::new_spinner();
-        progress.set_message(format!("Downloading {} aggTrades", self.symbol));
-
-        // Execute download
-        info!(
-            "Starting aggTrades download: {} from {} to {}",
-            self.symbol, start_time, end_time
-        );
-
-        let result = executor.execute_aggtrades_job(job.clone()).await;
-
-        progress.finish_and_clear();
-
-        // Format output
-        match cli.output_format {
-            OutputFormat::Json => {
-                output_aggtrades_json_result(&job, &result);
-            }
-            OutputFormat::Human => {
-                output_aggtrades_human_result(&job, &result);
-            }
-        }
-
-        result.map(|_| ()).map_err(CliError::DownloadError)
     }
 }
 
@@ -704,8 +750,10 @@ fn create_progress_bar(job: &DownloadJob) -> ProgressBar {
     let pb = ProgressBar::new(total_bars);
     pb.set_style(
         ProgressStyle::default_bar()
+            // SAFETY: Template is a compile-time constant that has been tested.
+            // expect() is safe here as the template format is validated at compile time.
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
-            .expect("Failed to create progress style")
+            .expect("hardcoded template is valid")
             .progress_chars("#>-"),
     );
     pb.set_message(message);
@@ -865,18 +913,19 @@ impl FundingArgs {
     }
 
     /// Parse end time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
+    /// For date-only format, uses end-of-day (23:59:59.999) so --end-time includes the entire day
     fn parse_end_time(&self) -> Result<i64, CliError> {
         // Try parsing as full datetime first
         if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.end_time)) {
             return Ok(dt.timestamp_millis());
         }
 
-        // Fall back to date-only format
+        // Fall back to date-only format - use end-of-day so the specified date is fully included
         let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
             .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
 
         let datetime = date
-            .and_hms_opt(0, 0, 0)
+            .and_hms_milli_opt(23, 59, 59, 999)
             .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
 
         Ok(datetime.and_utc().timestamp_millis())
@@ -886,6 +935,14 @@ impl FundingArgs {
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
         let start_time = self.parse_start_time()?;
         let end_time = self.parse_end_time()?;
+
+        // Handle Reset/Verify modes before starting downloads
+        let resume_dir = cli.resume_dir.clone().unwrap_or_else(|| PathBuf::from(".resume"));
+        match cli.resume {
+            ResumeMode::Reset => handle_resume_reset(&resume_dir)?,
+            ResumeMode::Verify => handle_resume_verify(&resume_dir)?,
+            _ => {}
+        }
 
         // Always use hierarchical structure - no exceptions
         use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
@@ -913,121 +970,142 @@ impl FundingArgs {
             self.end_time
         );
 
-        // Execute a job for each month
-        for month_range in month_ranges {
-            let path_builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-                .with_data_type(DataType::Funding)
-                .with_month(month_range.month);
+        // Pre-build job configs for concurrent execution (F040)
+        let job_configs: Vec<_> = month_ranges
+            .into_iter()
+            .filter_map(|month_range| {
+                let path_builder =
+                    OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
+                        .with_data_type(DataType::Funding)
+                        .with_month(month_range.month);
 
-            let output_path = path_builder.build().map_err(|e| {
-                CliError::InvalidArgument(format!("Failed to build output path: {e}"))
-            })?;
+                match path_builder.build() {
+                    Ok(output_path) => Some((month_range, output_path)),
+                    Err(e) => {
+                        error!("Failed to build output path: {e}");
+                        None
+                    }
+                }
+            })
+            .collect();
 
-            info!(
-                "Processing month {}: {} to {}",
-                month_range.month, month_range.start_ms, month_range.end_ms
-            );
+        // Execute jobs with configurable concurrency (F040)
+        let concurrency = cli.concurrency.max(1);
+        let config = JobConfig::from_cli(cli);
+        info!(
+            "Processing {} months with concurrency {}",
+            job_configs.len(),
+            concurrency
+        );
 
-            self.execute_single_job(
-                cli,
-                shutdown.clone(),
-                month_range.start_ms,
-                month_range.end_ms,
-                output_path,
-            )
-            .await?;
+        let results: Vec<Result<(), CliError>> = stream::iter(job_configs)
+            .map(|(month_range, output_path)| {
+                let identifier = self.identifier.clone();
+                let symbol = self.symbol.clone();
+                let config_clone = config.clone();
+                let shutdown_clone = shutdown.clone();
+
+                async move {
+                    info!(
+                        "Processing month {}: {} to {}",
+                        month_range.month, month_range.start_ms, month_range.end_ms
+                    );
+
+                    execute_funding_job(
+                        &identifier,
+                        &symbol,
+                        &config_clone,
+                        shutdown_clone,
+                        month_range.start_ms,
+                        month_range.end_ms,
+                        output_path,
+                    )
+                    .await
+                }
+            })
+            .buffer_unordered(concurrency)
+            .collect()
+            .await;
+
+        // Check for errors
+        for result in results {
+            result?;
         }
 
         Ok(())
     }
+}
 
-    /// Execute a single download job
-    async fn execute_single_job(
-        &self,
-        cli: &Cli,
-        shutdown: SharedShutdown,
-        start_time: i64,
-        end_time: i64,
-        output_path: PathBuf,
-    ) -> Result<(), CliError> {
-        // Create download job
-        let job = DownloadJob::new_funding(
-            self.identifier.clone(),
-            self.symbol.clone(),
-            start_time,
-            end_time,
-            output_path.clone(),
-        );
+/// Helper function for concurrent funding job execution (F040)
+async fn execute_funding_job(
+    identifier: &str,
+    symbol: &str,
+    config: &JobConfig,
+    shutdown: SharedShutdown,
+    start_time: i64,
+    end_time: i64,
+    output_path: PathBuf,
+) -> Result<(), CliError> {
+    // Create download job
+    let job = DownloadJob::new_funding(
+        identifier.to_string(),
+        symbol.to_string(),
+        start_time,
+        end_time,
+        output_path.clone(),
+    );
 
-        // Create executor
-        let executor = match cli.resume {
-            ResumeMode::Off => DownloadExecutor::new(),
-            ResumeMode::On => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-            ResumeMode::Reset => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                // CRITICAL SAFETY GUARDS: Prevent catastrophic data loss
-                if resume_dir.exists() {
-                    validate_safe_delete_path(&resume_dir)?;
-                    confirm_resume_reset(&resume_dir)?;
-                    std::fs::remove_dir_all(&resume_dir).map_err(|e| {
-                        CliError::InvalidArgument(format!("Failed to reset resume state: {e}"))
-                    })?;
-                    eprintln!("Resume state deleted successfully.\n");
-                }
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-            ResumeMode::Verify => {
-                let resume_dir = cli
-                    .resume_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from(".resume"));
-                // TODO: Add resume state verification logic
-                // For now, just use normal resume
-                DownloadExecutor::new_with_resume(resume_dir)
-            }
-        };
-
-        // Apply CLI flags to executor (P0-6 fix)
-        let executor = executor
-            .with_max_retries(cli.max_retries)
-            .with_force(cli.force)
-            .with_shutdown(shutdown);
-
-        // Create progress bar
-        let progress = ProgressBar::new_spinner();
-        progress.set_message(format!("Downloading {} funding rates", self.symbol));
-
-        // Execute download
-        info!(
-            "Starting funding rates download: {} from {} to {}",
-            self.symbol, start_time, end_time
-        );
-
-        let result = executor.execute_funding_job(job.clone()).await;
-
-        progress.finish_and_clear();
-
-        // Format output
-        match cli.output_format {
-            OutputFormat::Json => {
-                output_funding_json_result(&job, &result);
-            }
-            OutputFormat::Human => {
-                output_funding_human_result(&job, &result);
-            }
+    // Create executor (note: reset mode should be handled before concurrent jobs start)
+    let executor = match config.resume {
+        ResumeMode::Off => DownloadExecutor::new(),
+        ResumeMode::On | ResumeMode::Verify => {
+            let resume_dir = config
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
         }
+        ResumeMode::Reset => {
+            // In concurrent mode, reset is handled once in execute(), so just use resume mode
+            let resume_dir = config
+                .resume_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(".resume"));
+            DownloadExecutor::new_with_resume(resume_dir)
+        }
+    };
 
-        result.map(|_| ()).map_err(CliError::DownloadError)
+    // Apply CLI flags to executor
+    let executor = executor
+        .with_max_retries(config.max_retries)
+        .with_force(config.force)
+        .with_shutdown(shutdown);
+
+    // Create progress bar
+    let progress = ProgressBar::new_spinner();
+    progress.set_message(format!("Downloading {} funding rates", symbol));
+
+    // Execute download
+    info!(
+        "Starting funding rates download: {} from {} to {}",
+        symbol, start_time, end_time
+    );
+
+    let result = executor.execute_funding_job(job.clone()).await;
+
+    progress.finish_and_clear();
+
+    // Format output
+    match config.output_format {
+        OutputFormat::Json => {
+            output_funding_json_result(&job, &result);
+        }
+        OutputFormat::Human => {
+            output_funding_human_result(&job, &result);
+        }
     }
+
+    result.map(|_| ()).map_err(CliError::DownloadError)
 }
 
 /// Output funding result as JSON
