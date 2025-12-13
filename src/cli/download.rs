@@ -197,11 +197,14 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub resume_dir: Option<PathBuf>,
 
-    /// Number of concurrent downloads (default: 1, max: 32)
+    /// Number of concurrent downloads (default: 4, max: 32)
     ///
-    /// Higher values increase throughput but consume more rate limit quota.
-    /// Values above 32 are rejected to prevent self-inflicted rate limiting.
-    #[arg(long, global = true, default_value = "1", value_parser = parse_concurrency)]
+    /// Higher values increase throughput for large date ranges by downloading
+    /// multiple months in parallel. The rate limiter coordinates all concurrent
+    /// requests to stay within Binance API limits.
+    ///
+    /// Recommended: 4-8 for most use cases, up to 16 for very large backfills.
+    #[arg(long, global = true, default_value = "4", value_parser = parse_concurrency)]
     pub concurrency: usize,
 
     /// Maximum number of retries for failed requests (default: 5, range: 1-20)
