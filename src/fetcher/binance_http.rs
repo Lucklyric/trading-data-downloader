@@ -67,11 +67,12 @@ impl BinanceHttpClient {
     /// # Errors
     /// Returns FetcherError on network, parse, or API errors
     ///
-    /// # Rate Limiting (F037)
+    /// # Rate Limiting (F037, C2)
     ///
     /// The weight parameter is used to properly consume rate limit quota.
-    /// Using incorrect weights can lead to HTTP 429 errors. Endpoint weights
-    /// are defined in `BinanceMarketConfig` (e.g., klines_weight = 5).
+    /// Rate limiter is acquired before each attempt (including retries) to
+    /// ensure quota is properly tracked. Using incorrect weights can lead
+    /// to HTTP 429 errors. Endpoint weights are defined in `BinanceMarketConfig`.
     pub async fn get<T>(
         &self,
         endpoint: &str,
@@ -84,13 +85,6 @@ impl BinanceHttpClient {
         // 1. Build full URL
         let url = format!("{}{}", self.base_url, endpoint);
 
-        // 2. Consult rate limiter before making request (F037)
-        // Use actual endpoint weight to properly track quota consumption
-        self.rate_limiter
-            .acquire(weight as usize)
-            .await
-            .map_err(|e| FetcherError::NetworkError(format!("Rate limiter error: {e}")))?;
-
         debug!(
             "Making GET request to: {} with {} params (weight: {})",
             url,
@@ -98,8 +92,8 @@ impl BinanceHttpClient {
             weight
         );
 
-        // 3. Execute request with retry logic
-        self.request_with_retry(&url, params).await
+        // 2. Execute request with retry logic (rate limiter acquired per attempt - C2)
+        self.request_with_retry(&url, params, weight).await
     }
 
     /// Implement retry logic with exponential backoff (T201)
@@ -112,7 +106,17 @@ impl BinanceHttpClient {
     /// Does not retry on:
     /// - 4xx client errors (except 429)
     /// - Successful responses
-    async fn request_with_retry<T>(&self, url: &str, params: &[(&str, String)]) -> FetcherResult<T>
+    ///
+    /// # Rate Limiting (C2)
+    ///
+    /// Rate limiter is acquired before each attempt (including retries) to
+    /// ensure quota is properly tracked across all HTTP requests.
+    async fn request_with_retry<T>(
+        &self,
+        url: &str,
+        params: &[(&str, String)],
+        weight: u32,
+    ) -> FetcherResult<T>
     where
         T: DeserializeOwned,
     {
@@ -130,6 +134,13 @@ impl BinanceHttpClient {
             if self.shutdown_requested() {
                 last_error = Some(FetcherError::NetworkError("Shutdown requested".to_string()));
                 break;
+            }
+
+            // Acquire rate limiter BEFORE each attempt including retries (C2)
+            // This ensures quota is properly tracked for all HTTP requests
+            if let Err(e) = self.rate_limiter.acquire(weight as usize).await {
+                last_error = Some(FetcherError::NetworkError(format!("Rate limiter error: {e}")));
+                break 'attempts;
             }
 
             // Execute the HTTP request
@@ -188,7 +199,10 @@ impl BinanceHttpClient {
                 last_error_type = Some(error_type);
 
                 if attempt < self.max_retries {
-                    let backoff = calculate_backoff(attempt);
+                    // Honor Retry-After header if present, otherwise use exponential backoff (M7)
+                    let backoff = self
+                        .parse_retry_after_header(response.headers())
+                        .unwrap_or_else(|| calculate_backoff(attempt));
                     debug!("Retrying after {:?}", backoff);
                     let ctx = RetryContext::new(
                         (attempt + 1) as usize,
@@ -277,16 +291,29 @@ impl BinanceHttpClient {
                 debug!("Response weight: {}", weight);
             }
 
-            // Success - deserialize response
-            match response.json::<T>().await {
+            // Success - read body as text first to preserve it on parse error (M1)
+            let body_text = match response.text().await {
+                Ok(text) => text,
+                Err(e) => {
+                    return Err(FetcherError::NetworkError(format!(
+                        "Failed to read response body: {e}"
+                    )));
+                }
+            };
+
+            // Deserialize from text, preserving body snippet on error for debugging
+            match serde_json::from_str::<T>(&body_text) {
                 Ok(data) => {
                     debug!("Request succeeded on attempt {}", attempt + 1);
                     log_retry_success(attempt, max_attempts, &symbol, date_range, endpoint);
                     return Ok(data);
                 }
                 Err(e) => {
+                    // Include body snippet in error for debugging (M1)
+                    let snippet: String = body_text.chars().take(500).collect();
+                    let truncated = if body_text.len() > 500 { "..." } else { "" };
                     return Err(FetcherError::ParseError(format!(
-                        "Failed to deserialize response: {e}"
+                        "Failed to deserialize response: {e}. Body snippet: {snippet}{truncated}"
                     )));
                 }
             }
@@ -333,6 +360,40 @@ impl BinanceHttpClient {
                 None
             }
         }
+    }
+
+    /// Parse Retry-After header for 429 responses (M7)
+    ///
+    /// Binance may send a Retry-After header indicating how long to wait.
+    /// Falls back to None if header is missing or invalid.
+    ///
+    /// # Arguments
+    /// * `headers` - Response headers from Binance API
+    ///
+    /// # Returns
+    /// Some(Duration) if Retry-After header is present and valid, None otherwise
+    fn parse_retry_after_header(&self, headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+        // Try standard Retry-After header (seconds)
+        if let Some(retry_after) = headers.get("Retry-After") {
+            if let Ok(seconds_str) = retry_after.to_str() {
+                if let Ok(seconds) = seconds_str.parse::<u64>() {
+                    debug!("Using Retry-After header: {} seconds", seconds);
+                    return Some(Duration::from_secs(seconds));
+                }
+            }
+        }
+
+        // Try Binance-specific X-Mbx-Retry-After header (milliseconds)
+        if let Some(retry_after) = headers.get("X-Mbx-Retry-After") {
+            if let Ok(ms_str) = retry_after.to_str() {
+                if let Ok(ms) = ms_str.parse::<u64>() {
+                    debug!("Using X-Mbx-Retry-After header: {} ms", ms);
+                    return Some(Duration::from_millis(ms));
+                }
+            }
+        }
+
+        None
     }
 
     fn shutdown_requested(&self) -> bool {

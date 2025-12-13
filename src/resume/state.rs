@@ -84,6 +84,10 @@ impl ResumeState {
     }
 
     /// Add a checkpoint and update metadata (T170)
+    ///
+    /// Prunes old checkpoints to prevent unbounded growth (H1).
+    /// Only the most recent 5 checkpoints are retained to bound
+    /// state file size below MAX_STATE_FILE_SIZE.
     pub fn add_checkpoint(&mut self, checkpoint: Checkpoint) {
         self.metadata.total_checkpoints += 1;
         self.metadata.total_records += checkpoint.record_count();
@@ -97,6 +101,19 @@ impl ResumeState {
         );
 
         self.checkpoints.push(checkpoint);
+
+        // Prune old checkpoints to prevent unbounded growth (H1)
+        // Keep only the last 5 checkpoints - only the most recent is needed for resume
+        const MAX_CHECKPOINTS: usize = 5;
+        if self.checkpoints.len() > MAX_CHECKPOINTS {
+            let drain_count = self.checkpoints.len() - MAX_CHECKPOINTS;
+            self.checkpoints.drain(0..drain_count);
+            debug!(
+                retained_checkpoints = self.checkpoints.len(),
+                "Pruned old checkpoints to prevent unbounded growth"
+            );
+        }
+
         self.updated_at = chrono::Utc::now().timestamp_millis();
     }
 

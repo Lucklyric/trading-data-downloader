@@ -253,12 +253,15 @@ impl OutputPathBuilder {
     }
 }
 
-/// Sanitize venue name for filesystem safety
+/// Sanitize venue name for filesystem safety (C3)
 ///
 /// Replaces: `/`, `\`, `:`, `-` → `_`
+/// Replaces: `..` → `__` (path traversal prevention)
 /// Converts to lowercase
 fn sanitize_venue(name: &str) -> String {
-    name.replace(['/', '\\', ':', '-'], "_").to_lowercase()
+    name.replace("..", "__")
+        .replace(['/', '\\', ':', '-'], "_")
+        .to_lowercase()
 }
 
 /// Sanitize symbol name for filesystem safety (F039)

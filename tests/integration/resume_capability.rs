@@ -332,8 +332,10 @@ fn test_resume_state_file_corruption_prevention() {
     state.save(&state_path).unwrap();
 
     // Load and verify - this tests that save/load are atomic
+    // Note: checkpoints are pruned to last 5 to prevent unbounded growth (H1)
     let loaded = ResumeState::load(&state_path).unwrap();
-    assert_eq!(loaded.checkpoints().len(), 10);
+    assert_eq!(loaded.checkpoints().len(), 5);
+    // Metadata still tracks all 10 checkpoints' records (600 = 10 * 60)
     assert_eq!(loaded.metadata().total_records(), 600);
 
     // Save again to ensure temp file cleanup
@@ -410,10 +412,11 @@ fn test_concurrent_readers_consistency() {
             let loaded_state = ResumeState::load(&state_path).expect("Failed to load state");
 
             // Verify consistency
+            // Note: checkpoints are pruned to last 5 to prevent unbounded growth (H1)
             assert_eq!(loaded_state.identifier(), "BINANCE:BTC/USDT:USDT");
             assert_eq!(loaded_state.symbol(), "BTCUSDT");
             assert_eq!(loaded_state.interval(), Some("1m"));
-            assert_eq!(loaded_state.checkpoints().len(), 10);
+            assert_eq!(loaded_state.checkpoints().len(), 5);
             assert_eq!(loaded_state.metadata().total_records(), 600);
 
             loaded_state.checkpoints().len()
@@ -427,8 +430,8 @@ fn test_concurrent_readers_consistency() {
         .map(|h| h.join().expect("Thread panicked"))
         .collect();
 
-    // All threads should have read 10 checkpoints
-    assert!(results.iter().all(|&count| count == 10));
+    // All threads should have read 5 checkpoints (pruned from 10)
+    assert!(results.iter().all(|&count| count == 5));
 }
 
 /// Test B: Concurrent Writers

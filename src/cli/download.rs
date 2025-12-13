@@ -14,6 +14,50 @@ use tracing::{error, info};
 
 use super::CliError;
 
+/// Maximum allowed concurrency to prevent self-inflicted rate limiting (L3)
+const MAX_CONCURRENCY: usize = 32;
+
+/// Try to parse datetime from RFC3339 format (M6)
+///
+/// Handles both inputs with and without timezone designators:
+/// - "2024-01-01T00:00:00Z" - explicit UTC
+/// - "2024-01-01T00:00:00+01:00" - explicit offset
+/// - "2024-01-01T00:00:00" - no timezone, assumed UTC
+///
+/// Returns timestamp in milliseconds, or None if parsing fails.
+fn try_parse_datetime_rfc3339(input: &str) -> Option<i64> {
+    // First try parsing as-is (may have timezone)
+    if let Ok(dt) = DateTime::parse_from_rfc3339(input) {
+        return Some(dt.timestamp_millis());
+    }
+
+    // If that fails, try appending 'Z' for inputs without timezone
+    // This handles "2024-01-01T00:00:00" format
+    if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{input}Z")) {
+        return Some(dt.timestamp_millis());
+    }
+
+    None
+}
+
+/// Parse and validate concurrency value (L3)
+fn parse_concurrency(s: &str) -> Result<usize, String> {
+    let value: usize = s
+        .parse()
+        .map_err(|_| format!("'{}' is not a valid number", s))?;
+
+    if value == 0 {
+        return Err("concurrency must be at least 1".to_string());
+    }
+    if value > MAX_CONCURRENCY {
+        return Err(format!(
+            "concurrency {} exceeds maximum of {}",
+            value, MAX_CONCURRENCY
+        ));
+    }
+    Ok(value)
+}
+
 /// Resume modes (T175)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResumeMode {
@@ -153,8 +197,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub resume_dir: Option<PathBuf>,
 
-    /// Number of concurrent downloads (default: 1)
-    #[arg(long, global = true, default_value = "1")]
+    /// Number of concurrent downloads (default: 1, max: 32)
+    ///
+    /// Higher values increase throughput but consume more rate limit quota.
+    /// Values above 32 are rejected to prevent self-inflicted rate limiting.
+    #[arg(long, global = true, default_value = "1", value_parser = parse_concurrency)]
     pub concurrency: usize,
 
     /// Maximum number of retries for failed requests (default: 5, range: 1-20)
@@ -592,9 +639,9 @@ async fn execute_aggtrades_job(
 impl AggTradesArgs {
     /// Parse start time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
     fn parse_start_time(&self) -> Result<i64, CliError> {
-        // Try parsing as full datetime first
-        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.start_time)) {
-            return Ok(dt.timestamp_millis());
+        // Try parsing as full datetime with timezone (M6)
+        if let Some(ts) = try_parse_datetime_rfc3339(&self.start_time) {
+            return Ok(ts);
         }
 
         // Fall back to date-only format
@@ -611,9 +658,9 @@ impl AggTradesArgs {
     /// Parse end time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
     /// For date-only format, uses end-of-day (23:59:59.999) so --end-time includes the entire day
     fn parse_end_time(&self) -> Result<i64, CliError> {
-        // Try parsing as full datetime first
-        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.end_time)) {
-            return Ok(dt.timestamp_millis());
+        // Try parsing as full datetime with timezone (M6)
+        if let Some(ts) = try_parse_datetime_rfc3339(&self.end_time) {
+            return Ok(ts);
         }
 
         // Fall back to date-only format - use end-of-day so the specified date is fully included
@@ -896,9 +943,9 @@ fn output_aggtrades_human_result(
 impl FundingArgs {
     /// Parse start time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
     fn parse_start_time(&self) -> Result<i64, CliError> {
-        // Try parsing as full datetime first
-        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.start_time)) {
-            return Ok(dt.timestamp_millis());
+        // Try parsing as full datetime with timezone (M6)
+        if let Some(ts) = try_parse_datetime_rfc3339(&self.start_time) {
+            return Ok(ts);
         }
 
         // Fall back to date-only format
@@ -915,9 +962,9 @@ impl FundingArgs {
     /// Parse end time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
     /// For date-only format, uses end-of-day (23:59:59.999) so --end-time includes the entire day
     fn parse_end_time(&self) -> Result<i64, CliError> {
-        // Try parsing as full datetime first
-        if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{}Z", self.end_time)) {
-            return Ok(dt.timestamp_millis());
+        // Try parsing as full datetime with timezone (M6)
+        if let Some(ts) = try_parse_datetime_rfc3339(&self.end_time) {
+            return Ok(ts);
         }
 
         // Fall back to date-only format - use end-of-day so the specified date is fully included

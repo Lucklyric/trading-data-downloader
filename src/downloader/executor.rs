@@ -162,9 +162,15 @@ impl DownloadExecutor {
                 crate::downloader::JobType::AggTrades => "aggtrades".to_string(),
                 crate::downloader::JobType::FundingRates => "funding".to_string(),
             };
+            // Sanitize identifier to prevent path traversal (M4)
+            // Replace all directory separators and parent references
+            let safe_identifier = job
+                .identifier
+                .replace("..", "__")
+                .replace([':', '/', '\\'], "_");
             let filename = format!(
                 "{}_{}_{}_{}.json",
-                job.identifier.replace([':', '/'], "_"),
+                safe_identifier,
                 data_type_str,
                 job.start_time,
                 job.end_time
@@ -216,9 +222,19 @@ impl DownloadExecutor {
                         path: path.display().to_string(),
                     });
                 }
-                // Other errors (IO, deserialization) - warn and start fresh
-                warn!(error = %e, "Failed to load resume state, starting fresh");
-                Ok(None)
+                // Other errors (IO, deserialization) - fail hard to prevent silent data loss (H2)
+                // Users should explicitly use --resume reset to clear corrupt state
+                error!(
+                    error = %e,
+                    path = %path.display(),
+                    "CRITICAL: Resume state is corrupt or unreadable. \
+                     Use --resume reset to clear and start fresh, or delete the file manually."
+                );
+                return Err(DownloadError::IoError(format!(
+                    "Corrupt resume state at {}: {}. Use --resume reset to clear.",
+                    path.display(),
+                    e
+                )));
             }
         }
     }
@@ -307,7 +323,8 @@ impl DownloadExecutor {
             return false;
         }
 
-        let backoff = calculate_backoff(retry_count);
+        // Fix off-by-one: calculate_backoff expects 0-indexed, but retry_count is 1-indexed (L2)
+        let backoff = calculate_backoff(retry_count.saturating_sub(1));
         warn!(
             retry_count = retry_count,
             max_retries = self.max_retries,
