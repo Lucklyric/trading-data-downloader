@@ -367,18 +367,27 @@ impl BinanceHttpClient {
     /// Binance may send a Retry-After header indicating how long to wait.
     /// Falls back to None if header is missing or invalid.
     ///
+    /// # Safety Cap
+    ///
+    /// Parsed values are capped at 5 minutes to prevent indefinite hangs
+    /// from malicious or buggy server responses.
+    ///
     /// # Arguments
     /// * `headers` - Response headers from Binance API
     ///
     /// # Returns
     /// Some(Duration) if Retry-After header is present and valid, None otherwise
     fn parse_retry_after_header(&self, headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+        // Maximum retry delay to prevent indefinite hangs (5 minutes)
+        const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
+
         // Try standard Retry-After header (seconds)
         if let Some(retry_after) = headers.get("Retry-After") {
             if let Ok(seconds_str) = retry_after.to_str() {
-                if let Ok(seconds) = seconds_str.parse::<u64>() {
-                    debug!("Using Retry-After header: {} seconds", seconds);
-                    return Some(Duration::from_secs(seconds));
+                if let Ok(seconds) = seconds_str.trim().parse::<u64>() {
+                    let duration = Duration::from_secs(seconds).min(MAX_RETRY_AFTER);
+                    debug!("Using Retry-After header: {} seconds (capped: {:?})", seconds, duration);
+                    return Some(duration);
                 }
             }
         }
@@ -386,9 +395,10 @@ impl BinanceHttpClient {
         // Try Binance-specific X-Mbx-Retry-After header (milliseconds)
         if let Some(retry_after) = headers.get("X-Mbx-Retry-After") {
             if let Ok(ms_str) = retry_after.to_str() {
-                if let Ok(ms) = ms_str.parse::<u64>() {
-                    debug!("Using X-Mbx-Retry-After header: {} ms", ms);
-                    return Some(Duration::from_millis(ms));
+                if let Ok(ms) = ms_str.trim().parse::<u64>() {
+                    let duration = Duration::from_millis(ms).min(MAX_RETRY_AFTER);
+                    debug!("Using X-Mbx-Retry-After header: {} ms (capped: {:?})", ms, duration);
+                    return Some(duration);
                 }
             }
         }

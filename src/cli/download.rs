@@ -26,6 +26,9 @@ const MAX_CONCURRENCY: usize = 32;
 ///
 /// Returns timestamp in milliseconds, or None if parsing fails.
 fn try_parse_datetime_rfc3339(input: &str) -> Option<i64> {
+    // Trim whitespace to handle user input with leading/trailing spaces
+    let input = input.trim();
+
     // First try parsing as-is (may have timezone)
     if let Ok(dt) = DateTime::parse_from_rfc3339(input) {
         return Some(dt.timestamp_millis());
