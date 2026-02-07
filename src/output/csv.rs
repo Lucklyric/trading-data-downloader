@@ -22,9 +22,11 @@ const DEFAULT_BUFFER_SIZE: usize = 8192; // 8KB buffer
 /// Sufficient for ~2.5 months of 1-minute bars per symbol (43,200 bars/month).
 const DEFAULT_DEDUP_CAPACITY: usize = 100_000;
 
-/// CSV record for OHLCV bar
+/// CSV record for OHLCV bar (NautilusTrader-compatible column names)
 #[derive(Debug, Serialize)]
 struct BarRecord {
+    /// NautilusTrader expects "timestamp" as the datetime index column
+    #[serde(rename = "timestamp")]
     open_time: i64,
     open: String,
     high: String,
@@ -262,27 +264,32 @@ impl OutputWriter for CsvBarsWriter {
     }
 }
 
-/// CSV record for aggregate trade
+/// CSV record for aggregate trade (NautilusTrader-compatible column names)
 #[derive(Debug, Serialize)]
 struct AggTradeRecord {
+    /// NautilusTrader expects "timestamp" as the first column for datetime index
+    timestamp: i64,
+    /// NautilusTrader expects "trade_id"
+    #[serde(rename = "trade_id")]
     agg_trade_id: i64,
     price: String,
     quantity: String,
     first_trade_id: i64,
     last_trade_id: i64,
-    timestamp: i64,
+    /// NautilusTrader expects "buyer_maker"
+    #[serde(rename = "buyer_maker")]
     is_buyer_maker: bool,
 }
 
 impl From<&AggTrade> for AggTradeRecord {
     fn from(trade: &AggTrade) -> Self {
         Self {
+            timestamp: trade.timestamp,
             agg_trade_id: trade.agg_trade_id,
             price: trade.price.to_string(),
             quantity: trade.quantity.to_string(),
             first_trade_id: trade.first_trade_id,
             last_trade_id: trade.last_trade_id,
-            timestamp: trade.timestamp,
             is_buyer_maker: trade.is_buyer_maker,
         }
     }
@@ -495,20 +502,24 @@ impl OutputWriter for CsvAggTradesWriter {
     }
 }
 
-/// CSV record for funding rate (T144)
+/// CSV record for funding rate (T144, NautilusTrader-compatible column names)
 #[derive(Debug, Serialize)]
 struct FundingRateRecord {
-    symbol: String,
-    funding_rate: String,
+    /// NautilusTrader expects "timestamp" as the datetime index column
+    #[serde(rename = "timestamp")]
     funding_time: i64,
+    symbol: String,
+    /// NautilusTrader expects "rate"
+    #[serde(rename = "rate")]
+    funding_rate: String,
 }
 
 impl From<&FundingRate> for FundingRateRecord {
     fn from(rate: &FundingRate) -> Self {
         Self {
+            funding_time: rate.funding_time,
             symbol: rate.symbol.clone(),
             funding_rate: rate.funding_rate.to_string(),
-            funding_time: rate.funding_time,
         }
     }
 }
@@ -766,8 +777,9 @@ pub fn read_time_range(path: &Path) -> OutputResult<Option<(i64, i64)>> {
 }
 
 /// Find the index of a timestamp column in CSV headers
+/// Supports both new NautilusTrader-compatible names and legacy column names for backward compatibility
 fn find_timestamp_index(headers: &StringRecord) -> Option<usize> {
-    for name in ["open_time", "timestamp", "funding_time"] {
+    for name in ["timestamp", "open_time", "funding_time"] {
         if let Some(idx) = headers.iter().position(|h| h == name) {
             return Some(idx);
         }
@@ -829,7 +841,8 @@ fn copy_existing_csv_to_writer<W: std::io::Write>(
     Ok(copied)
 }
 
-/// Load existing bar keys (open_time) from CSV into LruCache (P0-2: bounded memory)
+/// Load existing bar keys (timestamp) from CSV into LruCache (P0-2: bounded memory)
+/// Supports both "timestamp" (NautilusTrader) and legacy "open_time" column names
 fn load_existing_bars_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
     if !path.exists() {
         return Ok(());
@@ -844,8 +857,8 @@ fn load_existing_bars_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> Outp
         .clone();
     let ts_index = headers
         .iter()
-        .position(|h| h == "open_time")
-        .ok_or_else(|| OutputError::CsvError("open_time header not found".to_string()))?;
+        .position(|h| h == "timestamp" || h == "open_time")
+        .ok_or_else(|| OutputError::CsvError("timestamp header not found".to_string()))?;
     for rec in rdr.records() {
         let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
         if let Some(ts) = parse_i64(rec.get(ts_index)) {
@@ -856,6 +869,7 @@ fn load_existing_bars_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> Outp
 }
 
 /// Load existing aggtrade IDs from CSV into LruCache (P0-2: bounded memory)
+/// Supports both "trade_id" (NautilusTrader) and legacy "agg_trade_id" column names
 fn load_existing_aggtrade_ids_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
     if !path.exists() {
         return Ok(());
@@ -870,8 +884,8 @@ fn load_existing_aggtrade_ids_lru(path: &Path, out: &mut LruCache<i64, ()>) -> O
         .clone();
     let id_index = headers
         .iter()
-        .position(|h| h == "agg_trade_id")
-        .ok_or_else(|| OutputError::CsvError("agg_trade_id header not found".to_string()))?;
+        .position(|h| h == "trade_id" || h == "agg_trade_id")
+        .ok_or_else(|| OutputError::CsvError("trade_id header not found".to_string()))?;
     for rec in rdr.records() {
         let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
         if let Some(id) = parse_i64(rec.get(id_index)) {
@@ -881,7 +895,8 @@ fn load_existing_aggtrade_ids_lru(path: &Path, out: &mut LruCache<i64, ()>) -> O
     Ok(())
 }
 
-/// Load existing funding keys (funding_time) from CSV into LruCache (P0-2: bounded memory)
+/// Load existing funding keys (timestamp) from CSV into LruCache (P0-2: bounded memory)
+/// Supports both "timestamp" (NautilusTrader) and legacy "funding_time" column names
 fn load_existing_funding_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
     if !path.exists() {
         return Ok(());
@@ -896,8 +911,8 @@ fn load_existing_funding_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> O
         .clone();
     let ts_index = headers
         .iter()
-        .position(|h| h == "funding_time")
-        .ok_or_else(|| OutputError::CsvError("funding_time header not found".to_string()))?;
+        .position(|h| h == "timestamp" || h == "funding_time")
+        .ok_or_else(|| OutputError::CsvError("timestamp header not found".to_string()))?;
     for rec in rdr.records() {
         let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
         if let Some(ts) = parse_i64(rec.get(ts_index)) {
@@ -951,8 +966,8 @@ mod tests {
         // Verify headers exist in file
         let contents = std::fs::read_to_string(&output_path).unwrap();
         assert!(
-            contents.starts_with("open_time,open,high,low,close,volume"),
-            "Expected headers at start of file, got: {contents}"
+            contents.starts_with("timestamp,open,high,low,close,volume"),
+            "Expected NautilusTrader-compatible headers at start of file, got: {contents}"
         );
     }
 

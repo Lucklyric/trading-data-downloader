@@ -257,12 +257,12 @@ fn test_cli_funding_command() {
     let content = std::fs::read_to_string(&expected_path).unwrap();
     assert!(content.contains("symbol"), "Output should have CSV headers");
     assert!(
-        content.contains("funding_rate"),
-        "Output should have funding_rate column"
+        content.contains("rate"),
+        "Output should have rate column"
     );
     assert!(
-        content.contains("funding_time"),
-        "Output should have funding_time column"
+        content.contains("timestamp"),
+        "Output should have timestamp column"
     );
     assert!(
         content.contains("BTCUSDT"),

@@ -284,7 +284,7 @@ impl ArchiveDownloader {
             }
 
             // Skip header if it looks like column names
-            if line.contains("open_time") || line.contains("open,high") {
+            if line.contains("timestamp") || line.contains("open_time") || line.contains("open,high") {
                 continue;
             }
 

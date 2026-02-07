@@ -219,5 +219,5 @@ async fn test_coin_download_integration() {
     let lines: Vec<&str> = content.lines().collect();
 
     assert!(lines.len() > 1, "Should have header + data rows");
-    assert!(lines[0].contains("open_time"), "Should have CSV header");
+    assert!(lines[0].contains("timestamp"), "Should have CSV header");
 }
