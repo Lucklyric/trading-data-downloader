@@ -116,8 +116,7 @@ impl BinanceFuturesCoinFetcher {
             })?;
         let price_precision = u8::try_from(price_precision_raw).map_err(|_| {
             FetcherError::ParseError(format!(
-                "pricePrecision {} exceeds u8 range",
-                price_precision_raw
+                "pricePrecision {price_precision_raw} exceeds u8 range"
             ))
         })?;
 
@@ -129,8 +128,7 @@ impl BinanceFuturesCoinFetcher {
             })?;
         let quantity_precision = u8::try_from(quantity_precision_raw).map_err(|_| {
             FetcherError::ParseError(format!(
-                "quantityPrecision {} exceeds u8 range",
-                quantity_precision_raw
+                "quantityPrecision {quantity_precision_raw} exceeds u8 range"
             ))
         })?;
 
@@ -414,7 +412,6 @@ impl BinanceFuturesCoinFetcher {
     ) -> BarStream {
         let fetcher = self.clone();
         let interval_str = interval.to_string();
-        let _interval_ms = interval.to_milliseconds();
 
         let stream = stream::unfold((start_time, false), move |(current_time, done)| {
             let fetcher = fetcher.clone();

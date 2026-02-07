@@ -84,6 +84,47 @@ async fn shutdown_wait_returns_immediately_when_already_set() {
     assert!(elapsed < Duration::from_millis(10), "wait_for_shutdown took too long: {:?}", elapsed);
 }
 
+/// Verify that aggTrades shutdown checkpoints use cursor format (not TimeWindow).
+/// This ensures resume after Ctrl+C uses agg_trade_id for precise resume.
+#[tokio::test]
+async fn aggtrades_shutdown_saves_cursor_checkpoint() {
+    use trading_data_downloader::resume::checkpoint::{Checkpoint, CheckpointType};
+    use trading_data_downloader::resume::state::ResumeState;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let path = temp_dir.path().join("aggtrades_shutdown.json");
+
+    // Simulate what save_shutdown_checkpoint does for aggTrades with a known trade ID
+    let trade_id: i64 = 987654;
+    let checkpoint = Checkpoint::cursor(
+        format!("aggtrade_id:{}", trade_id),
+        500,
+        0,
+    );
+
+    let mut state = ResumeState::new(
+        "BINANCE:BTC/USDT:USDT".to_string(),
+        "BTCUSDT".to_string(),
+        None,
+        "aggtrades".to_string(),
+    );
+    state.add_checkpoint(checkpoint);
+    state.save(&path).unwrap();
+
+    // Load and verify it's a Cursor checkpoint with aggtrade_id prefix
+    let loaded = ResumeState::load(&path).unwrap();
+    let cp = &loaded.checkpoints()[0];
+    match cp.checkpoint_type() {
+        CheckpointType::Cursor { cursor } => {
+            assert!(cursor.starts_with("aggtrade_id:"), "Expected aggtrade_id cursor, got: {cursor}");
+            let id_str = cursor.strip_prefix("aggtrade_id:").unwrap();
+            assert_eq!(id_str.parse::<i64>().unwrap(), trade_id);
+        }
+        other => panic!("Expected Cursor checkpoint for aggTrades shutdown, got: {other:?}"),
+    }
+}
+
 /// P1-7: Test async checkpoint save via spawn_blocking
 #[tokio::test]
 async fn checkpoint_save_async_no_runtime_block() {

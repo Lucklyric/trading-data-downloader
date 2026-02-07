@@ -283,9 +283,11 @@ impl ArchiveDownloader {
                 continue;
             }
 
-            // Skip header if it looks like column names
-            if line.contains("timestamp") || line.contains("open_time") || line.contains("open,high") {
-                continue;
+            // Skip header: if the first CSV field is not a valid integer, it's a header row
+            if let Some(first_field) = line.split(',').next() {
+                if first_field.trim().parse::<i64>().is_err() {
+                    continue;
+                }
             }
 
             match Self::parse_csv_line(line) {

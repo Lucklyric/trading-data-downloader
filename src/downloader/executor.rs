@@ -6,7 +6,7 @@ use crate::downloader::config::{
     CHECKPOINT_INTERVAL_TRADES, MAX_RETRIES,
 };
 use crate::downloader::progress::{DownloadItemType, ProgressState, ProgressTracker};
-use crate::downloader::{DownloadError, DownloadJob, JobProgress, JobStatus};
+use crate::downloader::{DownloadError, DownloadJob, JobProgress, JobStatus, JobType};
 use crate::fetcher::{create_fetcher, DataFetcher, FetcherError};
 use crate::identifier::ExchangeIdentifier;
 use crate::output::csv::{read_time_range, CsvAggTradesWriter, CsvBarsWriter, CsvFundingWriter};
@@ -505,20 +505,38 @@ impl DownloadExecutor {
     async fn abort_due_to_shutdown(
         &self,
         job: &mut DownloadJob,
+        last_aggtrade_id: Option<i64>,
     ) -> Result<JobProgress, DownloadError> {
         job.status = JobStatus::Cancelled;
         job.progress.error = Some("Shutdown requested".to_string());
         info!("Shutdown requested - saving progress before exiting");
-        self.save_shutdown_checkpoint(job).await?;
+        self.save_shutdown_checkpoint(job, last_aggtrade_id).await?;
         Err(DownloadError::NetworkError(
             "Shutdown requested".to_string(),
         ))
     }
 
-    async fn save_shutdown_checkpoint(&self, job: &mut DownloadJob) -> Result<(), DownloadError> {
+    async fn save_shutdown_checkpoint(
+        &self,
+        job: &mut DownloadJob,
+        last_aggtrade_id: Option<i64>,
+    ) -> Result<(), DownloadError> {
         if let Some(timestamp) = job.progress.current_position {
-            let checkpoint =
-                Checkpoint::time_window(job.start_time, timestamp, job.progress.downloaded_bars, 0);
+            let checkpoint = match (&job.job_type, last_aggtrade_id) {
+                // AggTrades with a known trade ID: save cursor-based checkpoint
+                (JobType::AggTrades, Some(trade_id)) => Checkpoint::cursor(
+                    format!("aggtrade_id:{trade_id}"),
+                    job.progress.downloaded_bars,
+                    0,
+                ),
+                // All other cases: time-window checkpoint
+                _ => Checkpoint::time_window(
+                    job.start_time,
+                    timestamp,
+                    job.progress.downloaded_bars,
+                    0,
+                ),
+            };
             self.save_checkpoint(job, checkpoint).await?;
         }
         Ok(())
@@ -875,7 +893,7 @@ impl DownloadExecutor {
             last_error = None;
 
             if self.shutdown_requested() {
-                return self.abort_due_to_shutdown(job).await;
+                return self.abort_due_to_shutdown(job, None).await;
             }
             match fetcher
                 .fetch_bars_stream(&job.symbol, interval, *start_time, job.end_time)
@@ -888,7 +906,7 @@ impl DownloadExecutor {
                             tokio::select! {
                                 item = stream.next() => item,
                                 _ = shutdown.wait_for_shutdown() => {
-                                    return self.abort_due_to_shutdown(job).await;
+                                    return self.abort_due_to_shutdown(job, None).await;
                                 }
                             }
                         } else {
@@ -968,7 +986,7 @@ impl DownloadExecutor {
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
                 if self.shutdown_requested() {
-                    return self.abort_due_to_shutdown(job).await;
+                    return self.abort_due_to_shutdown(job, None).await;
                 }
                 job.status = JobStatus::Failed;
                 let error_msg = last_error
@@ -1005,13 +1023,15 @@ impl DownloadExecutor {
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
         let mut last_error: Option<FetcherError>;
+        // Track last processed trade ID for cursor-based shutdown checkpoints
+        let mut last_aggtrade_id: Option<i64> = None;
 
         loop {
             // Reset last_error at start of each attempt so successful retries complete properly
             last_error = None;
 
             if self.shutdown_requested() {
-                return self.abort_due_to_shutdown(job).await;
+                return self.abort_due_to_shutdown(job, last_aggtrade_id).await;
             }
             match fetcher
                 .fetch_aggtrades_stream(&job.symbol, *start_time, job.end_time, *from_id)
@@ -1024,7 +1044,7 @@ impl DownloadExecutor {
                             tokio::select! {
                                 item = stream.next() => item,
                                 _ = shutdown.wait_for_shutdown() => {
-                                    return self.abort_due_to_shutdown(job).await;
+                                    return self.abort_due_to_shutdown(job, last_aggtrade_id).await;
                                 }
                             }
                         } else {
@@ -1045,6 +1065,7 @@ impl DownloadExecutor {
 
                                 let timestamp = trade.timestamp;
                                 job.progress.current_position = Some(timestamp);
+                                last_aggtrade_id = Some(trade.agg_trade_id);
 
                                 progress_state.update(1, Some(timestamp));
                                 if progress_state.should_emit_update() {
@@ -1090,7 +1111,7 @@ impl DownloadExecutor {
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
                 if self.shutdown_requested() {
-                    return self.abort_due_to_shutdown(job).await;
+                    return self.abort_due_to_shutdown(job, last_aggtrade_id).await;
                 }
                 job.status = JobStatus::Failed;
                 let error_msg = last_error
@@ -1103,10 +1124,11 @@ impl DownloadExecutor {
                 )));
             }
 
-            // Continue from last known position
-            if let Some(pos) = job.progress.current_position {
+            // Continue from last known trade ID if available, else fall back to timestamp
+            if let Some(trade_id) = last_aggtrade_id {
+                *from_id = Some(trade_id + 1);
+            } else if let Some(pos) = job.progress.current_position {
                 *start_time = pos + 1;
-                // Clear from_id on retry - use timestamp-based resume after stream errors
                 *from_id = None;
             }
         }
@@ -1131,7 +1153,7 @@ impl DownloadExecutor {
             last_error = None;
 
             if self.shutdown_requested() {
-                return self.abort_due_to_shutdown(job).await;
+                return self.abort_due_to_shutdown(job, None).await;
             }
             match fetcher
                 .fetch_funding_stream(&job.symbol, *start_time, job.end_time)
@@ -1144,7 +1166,7 @@ impl DownloadExecutor {
                             tokio::select! {
                                 item = stream.next() => item,
                                 _ = shutdown.wait_for_shutdown() => {
-                                    return self.abort_due_to_shutdown(job).await;
+                                    return self.abort_due_to_shutdown(job, None).await;
                                 }
                             }
                         } else {
@@ -1211,7 +1233,7 @@ impl DownloadExecutor {
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
                 if self.shutdown_requested() {
-                    return self.abort_due_to_shutdown(job).await;
+                    return self.abort_due_to_shutdown(job, None).await;
                 }
                 job.status = JobStatus::Failed;
                 let error_msg = last_error

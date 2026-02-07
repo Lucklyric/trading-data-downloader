@@ -47,15 +47,14 @@ fn try_parse_datetime_rfc3339(input: &str) -> Option<i64> {
 fn parse_concurrency(s: &str) -> Result<usize, String> {
     let value: usize = s
         .parse()
-        .map_err(|_| format!("'{}' is not a valid number", s))?;
+        .map_err(|_| format!("'{s}' is not a valid number"))?;
 
     if value == 0 {
         return Err("concurrency must be at least 1".to_string());
     }
     if value > MAX_CONCURRENCY {
         return Err(format!(
-            "concurrency {} exceeds maximum of {}",
-            value, MAX_CONCURRENCY
+            "concurrency {value} exceeds maximum of {MAX_CONCURRENCY}"
         ));
     }
     Ok(value)
@@ -96,8 +95,7 @@ fn handle_resume_reset(resume_dir: &PathBuf) -> Result<(), CliError> {
         info!("Reset mode: deleting existing resume directory: {:?}", resume_dir);
         std::fs::remove_dir_all(resume_dir).map_err(|e| {
             CliError::InvalidArgument(format!(
-                "Failed to delete resume directory {:?}: {}",
-                resume_dir, e
+                "Failed to delete resume directory {resume_dir:?}: {e}"
             ))
         })?;
         info!("Resume directory deleted successfully");
@@ -117,8 +115,7 @@ fn handle_resume_verify(resume_dir: &PathBuf) -> Result<(), CliError> {
     // Check for any .json files in resume directory and validate them
     let entries = std::fs::read_dir(resume_dir).map_err(|e| {
         CliError::InvalidArgument(format!(
-            "Failed to read resume directory {:?}: {}",
-            resume_dir, e
+            "Failed to read resume directory {resume_dir:?}: {e}"
         ))
     })?;
 
@@ -130,7 +127,7 @@ fn handle_resume_verify(resume_dir: &PathBuf) -> Result<(), CliError> {
             CliError::InvalidArgument(format!("Failed to read directory entry: {e}"))
         })?;
         let path = entry.path();
-        if path.extension().map_or(false, |ext| ext == "json") {
+        if path.extension().is_some_and(|ext| ext == "json") {
             match ResumeState::load(&path) {
                 Ok(_state) => {
                     info!("Valid resume state: {:?}", path);
@@ -146,8 +143,7 @@ fn handle_resume_verify(resume_dir: &PathBuf) -> Result<(), CliError> {
 
     if error_count > 0 {
         return Err(CliError::InvalidArgument(format!(
-            "Verify failed: {} invalid resume state file(s) found. Use --resume reset to clear.",
-            error_count
+            "Verify failed: {error_count} invalid resume state file(s) found. Use --resume reset to clear."
         )));
     }
 
@@ -178,6 +174,28 @@ impl JobConfig {
             force: cli.force,
             output_format: cli.output_format,
         }
+    }
+
+    /// Create a configured executor from this job config.
+    ///
+    /// Resume mode Reset is handled identically to On here because the
+    /// actual directory reset happens once in the caller's `execute()` method
+    /// before any concurrent jobs are spawned.
+    fn create_executor(&self, shutdown: SharedShutdown) -> DownloadExecutor {
+        let executor = match self.resume {
+            ResumeMode::Off => DownloadExecutor::new(),
+            ResumeMode::On | ResumeMode::Verify | ResumeMode::Reset => {
+                let resume_dir = self
+                    .resume_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(".resume"));
+                DownloadExecutor::new_with_resume(resume_dir)
+            }
+        };
+        executor
+            .with_max_retries(self.max_retries)
+            .with_force(self.force)
+            .with_shutdown(shutdown)
     }
 }
 
@@ -516,31 +534,7 @@ async fn execute_bars_job(
         output_path.clone(),
     );
 
-    // Create executor (note: reset mode should be handled before concurrent jobs start)
-    let executor = match config.resume {
-        ResumeMode::Off => DownloadExecutor::new(),
-        ResumeMode::On | ResumeMode::Verify => {
-            let resume_dir = config
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        }
-        ResumeMode::Reset => {
-            // In concurrent mode, reset is handled once in execute(), so just use resume mode
-            let resume_dir = config
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        }
-    };
-
-    // Apply CLI flags to executor
-    let executor = executor
-        .with_max_retries(config.max_retries)
-        .with_force(config.force)
-        .with_shutdown(shutdown);
+    let executor = config.create_executor(shutdown);
 
     // Create progress bar
     let progress = create_progress_bar(&job);
@@ -589,35 +583,11 @@ async fn execute_aggtrades_job(
         output_path.clone(),
     );
 
-    // Create executor (note: reset mode should be handled before concurrent jobs start)
-    let executor = match config.resume {
-        ResumeMode::Off => DownloadExecutor::new(),
-        ResumeMode::On | ResumeMode::Verify => {
-            let resume_dir = config
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        }
-        ResumeMode::Reset => {
-            // In concurrent mode, reset is handled once in execute(), so just use resume mode
-            let resume_dir = config
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        }
-    };
-
-    // Apply CLI flags to executor
-    let executor = executor
-        .with_max_retries(config.max_retries)
-        .with_force(config.force)
-        .with_shutdown(shutdown);
+    let executor = config.create_executor(shutdown);
 
     // Create progress bar
     let progress = ProgressBar::new_spinner();
-    progress.set_message(format!("Downloading {} aggTrades", symbol));
+    progress.set_message(format!("Downloading {symbol} aggTrades"));
 
     // Execute download
     info!(
@@ -1102,35 +1072,11 @@ async fn execute_funding_job(
         output_path.clone(),
     );
 
-    // Create executor (note: reset mode should be handled before concurrent jobs start)
-    let executor = match config.resume {
-        ResumeMode::Off => DownloadExecutor::new(),
-        ResumeMode::On | ResumeMode::Verify => {
-            let resume_dir = config
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        }
-        ResumeMode::Reset => {
-            // In concurrent mode, reset is handled once in execute(), so just use resume mode
-            let resume_dir = config
-                .resume_dir
-                .clone()
-                .unwrap_or_else(|| PathBuf::from(".resume"));
-            DownloadExecutor::new_with_resume(resume_dir)
-        }
-    };
-
-    // Apply CLI flags to executor
-    let executor = executor
-        .with_max_retries(config.max_retries)
-        .with_force(config.force)
-        .with_shutdown(shutdown);
+    let executor = config.create_executor(shutdown);
 
     // Create progress bar
     let progress = ProgressBar::new_spinner();
-    progress.set_message(format!("Downloading {} funding rates", symbol));
+    progress.set_message(format!("Downloading {symbol} funding rates"));
 
     // Execute download
     info!(
