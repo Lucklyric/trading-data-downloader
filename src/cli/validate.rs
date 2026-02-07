@@ -71,11 +71,17 @@ impl ValidateCommand {
             )));
         }
 
-        let state_files: Vec<_> = std::fs::read_dir(resume_dir)
-            .map_err(|e| CliError::InvalidArgument(format!("Failed to read resume dir: {e}")))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
-            .collect();
+        let entries = std::fs::read_dir(resume_dir)
+            .map_err(|e| CliError::InvalidArgument(format!("Failed to read resume dir: {e}")))?;
+        let mut state_files = Vec::new();
+        for entry_result in entries {
+            let entry = entry_result.map_err(|e| {
+                CliError::InvalidArgument(format!("Failed to read directory entry: {e}"))
+            })?;
+            if entry.path().extension().is_some_and(|ext| ext == "json") {
+                state_files.push(entry);
+            }
+        }
 
         if state_files.is_empty() {
             println!("Resume directory exists but contains no state files");

@@ -125,7 +125,10 @@ fn handle_resume_verify(resume_dir: &PathBuf) -> Result<(), CliError> {
     let mut valid_count = 0;
     let mut error_count = 0;
 
-    for entry in entries.flatten() {
+    for entry_result in entries {
+        let entry = entry_result.map_err(|e| {
+            CliError::InvalidArgument(format!("Failed to read directory entry: {e}"))
+        })?;
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "json") {
             match ResumeState::load(&path) {
@@ -428,22 +431,19 @@ impl BarsArgs {
         // Pre-build job configs for concurrent execution (F040)
         let job_configs: Vec<_> = month_ranges
             .into_iter()
-            .filter_map(|month_range| {
+            .map(|month_range| {
                 let path_builder =
                     OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
                         .with_data_type(DataType::Bars)
                         .with_interval(interval)
                         .with_month(month_range.month);
 
-                match path_builder.build() {
-                    Ok(output_path) => Some((month_range, output_path)),
-                    Err(e) => {
-                        error!("Failed to build output path: {e}");
-                        None
-                    }
-                }
+                let output_path = path_builder.build().map_err(|e| {
+                    CliError::InvalidArgument(format!("Failed to build output path: {e}"))
+                })?;
+                Ok((month_range, output_path))
             })
-            .collect();
+            .collect::<Result<Vec<_>, CliError>>()?;
 
         // Execute jobs with configurable concurrency (F040)
         let concurrency = cli.concurrency.max(1);
@@ -722,21 +722,18 @@ impl AggTradesArgs {
         // Pre-build job configs for concurrent execution (F040)
         let job_configs: Vec<_> = month_ranges
             .into_iter()
-            .filter_map(|month_range| {
+            .map(|month_range| {
                 let path_builder =
                     OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
                         .with_data_type(DataType::AggTrades)
                         .with_month(month_range.month);
 
-                match path_builder.build() {
-                    Ok(output_path) => Some((month_range, output_path)),
-                    Err(e) => {
-                        error!("Failed to build output path: {e}");
-                        None
-                    }
-                }
+                let output_path = path_builder.build().map_err(|e| {
+                    CliError::InvalidArgument(format!("Failed to build output path: {e}"))
+                })?;
+                Ok((month_range, output_path))
             })
-            .collect();
+            .collect::<Result<Vec<_>, CliError>>()?;
 
         // Execute jobs with configurable concurrency (F040)
         let concurrency = cli.concurrency.max(1);
@@ -854,7 +851,7 @@ fn output_json_result(
         },
     };
 
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    println!("{}", serde_json::to_string(&output).unwrap());
 }
 
 /// Output result in human-readable format (T086)
@@ -919,7 +916,7 @@ fn output_aggtrades_json_result(
         }),
     };
 
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    println!("{}", serde_json::to_string(&output).unwrap());
 }
 
 /// Output aggTrades result in human-readable format
@@ -1026,21 +1023,18 @@ impl FundingArgs {
         // Pre-build job configs for concurrent execution (F040)
         let job_configs: Vec<_> = month_ranges
             .into_iter()
-            .filter_map(|month_range| {
+            .map(|month_range| {
                 let path_builder =
                     OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
                         .with_data_type(DataType::Funding)
                         .with_month(month_range.month);
 
-                match path_builder.build() {
-                    Ok(output_path) => Some((month_range, output_path)),
-                    Err(e) => {
-                        error!("Failed to build output path: {e}");
-                        None
-                    }
-                }
+                let output_path = path_builder.build().map_err(|e| {
+                    CliError::InvalidArgument(format!("Failed to build output path: {e}"))
+                })?;
+                Ok((month_range, output_path))
             })
-            .collect();
+            .collect::<Result<Vec<_>, CliError>>()?;
 
         // Execute jobs with configurable concurrency (F040)
         let concurrency = cli.concurrency.max(1);
@@ -1197,7 +1191,7 @@ fn output_funding_json_result(
         }),
     };
 
-    println!("{}", serde_json::to_string_pretty(&output).unwrap());
+    println!("{}", serde_json::to_string(&output).unwrap());
 }
 
 /// Output funding result in human-readable format

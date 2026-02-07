@@ -36,7 +36,9 @@ pub static GLOBAL_HTTP_CLIENT: Lazy<Arc<Client>> = Lazy::new(|| {
             .connect_timeout(Duration::from_secs(HTTP_CONNECT_TIMEOUT_SECS))
             .timeout(Duration::from_secs(HTTP_REQUEST_TIMEOUT_SECS))
             .build()
-            .expect("Failed to build HTTP client"),
+            .unwrap_or_else(|e| {
+                panic!("FATAL: Failed to build HTTP client: {}. Check system TLS configuration.", e);
+            }),
     )
 });
 

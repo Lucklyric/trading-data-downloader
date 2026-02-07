@@ -182,7 +182,7 @@ impl BarsWriter for CsvBarsWriter {
     /// Returns `Ok(true)` if bar was written, `Ok(false)` if duplicate was skipped
     fn write_bar(&mut self, bar: &Bar) -> OutputResult<bool> {
         // P0-2: dedup by open_time using LRU cache
-        if self.seen_timestamps.contains(&bar.open_time) {
+        if self.seen_timestamps.get(&bar.open_time).is_some() {
             self.duplicates_skipped += 1;
             debug!(
                 timestamp = bar.open_time,
@@ -245,6 +245,13 @@ impl OutputWriter for CsvBarsWriter {
                 e
             ))
         })?;
+
+        // Fsync parent directory to ensure the rename is durable
+        if let Some(parent) = self.final_path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
 
         info!(
             bars_written = self.bars_written,
@@ -402,7 +409,7 @@ impl AggTradesWriter for CsvAggTradesWriter {
     /// Implements deduplication by agg_trade_id (T125)
     fn write_aggtrade(&mut self, trade: &AggTrade) -> OutputResult<()> {
         // Check for duplicate agg_trade_id
-        if self.seen_ids.contains(&trade.agg_trade_id) {
+        if self.seen_ids.get(&trade.agg_trade_id).is_some() {
             self.duplicates_skipped += 1;
             debug!(
                 "Skipping duplicate agg_trade_id: {} (total duplicates: {})",
@@ -472,6 +479,13 @@ impl OutputWriter for CsvAggTradesWriter {
                 e
             ))
         })?;
+
+        // Fsync parent directory to ensure the rename is durable
+        if let Some(parent) = self.final_path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
 
         info!(
             "CSV aggTrades writer closed successfully: {} trades written, {} duplicates skipped",
@@ -615,7 +629,7 @@ impl CsvFundingWriter {
 impl FundingWriter for CsvFundingWriter {
     /// Write a single funding rate to CSV (T147)
     fn write_funding(&mut self, rate: &FundingRate) -> OutputResult<()> {
-        if self.seen_timestamps.contains(&rate.funding_time) {
+        if self.seen_timestamps.get(&rate.funding_time).is_some() {
             self.duplicates_skipped += 1;
             debug!(
                 timestamp = rate.funding_time,
@@ -681,6 +695,13 @@ impl OutputWriter for CsvFundingWriter {
                 e
             ))
         })?;
+
+        // Fsync parent directory to ensure the rename is durable
+        if let Some(parent) = self.final_path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
 
         info!(
             "CSV funding writer closed successfully: {} rates written",
@@ -1008,5 +1029,32 @@ mod tests {
         bar2.close_time += 60000;
         writer.write_bar(&bar2).unwrap();
         assert_eq!(writer.bars_written(), 2);
+    }
+
+    #[test]
+    fn test_lru_get_promotes_entry() {
+        // Verify that using get() promotes the entry in the LRU cache,
+        // keeping recently-checked duplicates from being evicted.
+        let cap = NonZeroUsize::new(3).unwrap();
+        let mut cache: LruCache<i64, ()> = LruCache::new(cap);
+
+        // Insert 3 entries
+        cache.put(1, ());
+        cache.put(2, ());
+        cache.put(3, ());
+
+        // Access entry 1 via get() - this should promote it
+        assert!(cache.get(&1).is_some());
+
+        // Insert a 4th entry, which should evict entry 2 (least recently used)
+        cache.put(4, ());
+
+        // Entry 1 should still be present (was promoted by get())
+        assert!(cache.get(&1).is_some(), "Entry 1 should be promoted by get()");
+        // Entry 2 should have been evicted
+        assert!(cache.get(&2).is_none(), "Entry 2 should be evicted");
+        // Entries 3 and 4 should still be present
+        assert!(cache.get(&3).is_some());
+        assert!(cache.get(&4).is_some());
     }
 }

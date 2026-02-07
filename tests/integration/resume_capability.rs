@@ -55,7 +55,7 @@ fn test_resume_state_schema_version_present() {
 
     let json = serde_json::to_string(&state).unwrap();
     assert!(json.contains("schema_version"));
-    assert!(json.contains("1.0.0"));
+    assert!(json.contains("1.1.0"));
 }
 
 // T017: Checkpoint time window semantics (end-exclusive)
@@ -220,7 +220,7 @@ fn test_resume_state_schema_version_in_json() {
     );
 
     let json = serde_json::to_value(&state).unwrap();
-    assert_eq!(json["schema_version"], "1.0.0");
+    assert_eq!(json["schema_version"], "1.1.0");
 }
 
 // T026: Concurrent access with file locking

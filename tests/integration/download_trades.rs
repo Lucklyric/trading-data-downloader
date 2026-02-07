@@ -87,7 +87,7 @@ async fn test_aggtrades_download_end_to_end() {
 
     // Fetch trades
     let mut stream = fetcher
-        .fetch_aggtrades_stream("BTCUSDT", start_time, end_time)
+        .fetch_aggtrades_stream("BTCUSDT", start_time, end_time, None)
         .await
         .expect("Failed to create stream");
 
@@ -255,7 +255,7 @@ async fn test_aggtrades_one_hour_window_chunking_live() {
     let start_time = end_time - (2 * 60 * 60 * 1000); // 2 hours ago
 
     let mut stream = fetcher
-        .fetch_aggtrades_stream("BTCUSDT", start_time, end_time)
+        .fetch_aggtrades_stream("BTCUSDT", start_time, end_time, None)
         .await
         .expect("Failed to create stream");
 

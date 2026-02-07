@@ -170,6 +170,7 @@ pub trait DataFetcher: Send + Sync {
     /// * `symbol` - Trading symbol (e.g., "BTCUSDT")
     /// * `start_time` - Start time (Unix timestamp in milliseconds)
     /// * `end_time` - End time (Unix timestamp in milliseconds)
+    /// * `from_id` - Optional starting trade ID for resume (overrides time-based start for first chunk)
     ///
     /// # Returns
     /// Stream of AggTrade results
@@ -181,6 +182,7 @@ pub trait DataFetcher: Send + Sync {
         symbol: &str,
         start_time: i64,
         end_time: i64,
+        from_id: Option<i64>,
     ) -> FetcherResult<AggTradeStream>;
 
     /// Fetch funding rates as a stream (T138)

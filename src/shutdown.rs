@@ -66,10 +66,15 @@ impl ShutdownCoordinator {
     }
 
     /// Wait until shutdown is requested. Returns immediately if already set.
+    ///
+    /// Uses a race-free pattern: the `notified()` future is created before
+    /// checking the flag, ensuring no notification is missed between the
+    /// check and the await (TOCTOU fix for P1-6).
     pub async fn wait_for_shutdown(&self) {
+        let notified = self.notify.notified();
         if self.is_shutdown_requested() {
             return;
         }
-        self.notify.notified().await;
+        notified.await;
     }
 }

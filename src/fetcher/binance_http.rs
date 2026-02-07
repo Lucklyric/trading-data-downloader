@@ -143,8 +143,19 @@ impl BinanceHttpClient {
                 break 'attempts;
             }
 
-            // Execute the HTTP request
-            let response = match self.client.get(url).query(params).send().await {
+            // Execute the HTTP request with shutdown awareness (P2-8)
+            let send_result = if let Some(shutdown) = &self.shutdown {
+                tokio::select! {
+                    result = self.client.get(url).query(params).send() => result,
+                    _ = shutdown.wait_for_shutdown() => {
+                        last_error = Some(FetcherError::NetworkError("Shutdown requested".to_string()));
+                        break 'attempts;
+                    }
+                }
+            } else {
+                self.client.get(url).query(params).send().await
+            };
+            let response = match send_result {
                 Ok(resp) => resp,
                 Err(e) => {
                     warn!(

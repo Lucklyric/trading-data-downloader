@@ -84,7 +84,7 @@ impl WriterType {
     /// Get the count of items written
     fn items_written(&self) -> u64 {
         match self {
-            WriterType::Bars(_) => 0, // CsvBarsWriter doesn't track count
+            WriterType::Bars(writer) => writer.bars_written(),
             WriterType::AggTrades(writer) => writer.trades_written(),
             WriterType::Funding(writer) => writer.rates_written(),
         }
@@ -168,9 +168,14 @@ impl DownloadExecutor {
                 .identifier
                 .replace("..", "__")
                 .replace([':', '/', '\\'], "_");
+            let safe_symbol = job
+                .symbol
+                .replace("..", "__")
+                .replace([':', '/', '\\'], "_");
             let filename = format!(
-                "{}_{}_{}_{}.json",
+                "{}_{}_{}_{}_{}.json",
                 safe_identifier,
+                safe_symbol,
                 data_type_str,
                 job.start_time,
                 job.end_time
@@ -180,7 +185,10 @@ impl DownloadExecutor {
     }
 
     /// Load existing resume state if available (T079, T168)
-    fn load_resume_state(&self, job: &DownloadJob) -> Result<Option<i64>, DownloadError> {
+    ///
+    /// Wraps blocking file I/O in `spawn_blocking` to avoid blocking the
+    /// async runtime (P1-7).
+    async fn load_resume_state(&self, job: &DownloadJob) -> Result<Option<i64>, DownloadError> {
         let path = match self.get_resume_state_path(job) {
             Some(p) => p,
             None => {
@@ -194,7 +202,12 @@ impl DownloadExecutor {
             return Ok(None);
         }
 
-        match ResumeState::load(&path) {
+        let path_clone = path.clone();
+        let load_result = tokio::task::spawn_blocking(move || ResumeState::load(&path_clone))
+            .await
+            .map_err(|e| DownloadError::IoError(format!("spawn_blocking join error: {e}")))?;
+
+        match load_result {
             Ok(state) => {
                 info!("Found existing resume state");
                 // Find latest checkpoint
@@ -230,57 +243,193 @@ impl DownloadExecutor {
                     "CRITICAL: Resume state is corrupt or unreadable. \
                      Use --resume reset to clear and start fresh, or delete the file manually."
                 );
-                return Err(DownloadError::IoError(format!(
+                Err(DownloadError::IoError(format!(
                     "Corrupt resume state at {}: {}. Use --resume reset to clear.",
                     path.display(),
                     e
-                )));
+                )))
+            }
+        }
+    }
+
+    /// Load existing resume state for aggtrades, returning the last agg_trade_id if available
+    ///
+    /// Returns `(Option<trade_id>, Option<timestamp>)`:
+    /// - First element: trade ID from "aggtrade_id:{id}" cursor (new format)
+    /// - Second element: timestamp from "timestamp:{ts}" cursor (legacy migrated format)
+    ///
+    /// Wraps blocking file I/O in `spawn_blocking` to avoid blocking the async runtime.
+    async fn load_aggtrades_resume_state(
+        &self,
+        job: &DownloadJob,
+    ) -> Result<(Option<i64>, Option<i64>), DownloadError> {
+        let path = match self.get_resume_state_path(job) {
+            Some(p) => p,
+            None => {
+                debug!("Resume capability not enabled");
+                return Ok((None, None));
+            }
+        };
+
+        if !path.exists() {
+            debug!("No resume state found, starting fresh download");
+            return Ok((None, None));
+        }
+
+        let path_clone = path.clone();
+        let load_result = tokio::task::spawn_blocking(move || ResumeState::load(&path_clone))
+            .await
+            .map_err(|e| DownloadError::IoError(format!("spawn_blocking join error: {e}")))?;
+
+        match load_result {
+            Ok(state) => {
+                info!("Found existing aggtrades resume state");
+                if let Some(checkpoint) = state.checkpoints().last() {
+                    match checkpoint.checkpoint_type() {
+                        CheckpointType::Cursor { cursor } => {
+                            if let Some(id_str) = cursor.strip_prefix("aggtrade_id:") {
+                                match id_str.parse::<i64>() {
+                                    Ok(id) => {
+                                        info!(
+                                            resume_aggtrade_id = id,
+                                            "Resuming aggtrades from trade ID"
+                                        );
+                                        return Ok((Some(id), None));
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            cursor = %cursor,
+                                            error = %e,
+                                            "Failed to parse aggtrade_id from cursor"
+                                        );
+                                    }
+                                }
+                            } else if let Some(ts_str) = cursor.strip_prefix("timestamp:") {
+                                // Legacy migrated cursor from 1.0.0
+                                match ts_str.parse::<i64>() {
+                                    Ok(ts) => {
+                                        warn!(
+                                            timestamp = ts,
+                                            "Legacy timestamp-based cursor from migration; \
+                                             falling back to timestamp-based resume"
+                                        );
+                                        return Ok((None, Some(ts)));
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            cursor = %cursor,
+                                            error = %e,
+                                            "Failed to parse timestamp from legacy cursor"
+                                        );
+                                    }
+                                }
+                            } else {
+                                warn!(
+                                    cursor = %cursor,
+                                    "Unrecognized cursor format in aggtrades resume state"
+                                );
+                            }
+                        }
+                        CheckpointType::TimeWindow { end_time, .. } => {
+                            // Shouldn't happen after migration but handle gracefully
+                            warn!(
+                                end_time = end_time,
+                                "Found TimeWindow checkpoint for aggtrades (pre-migration); \
+                                 falling back to timestamp-based resume"
+                            );
+                            return Ok((None, Some(*end_time)));
+                        }
+                        _ => {
+                            warn!("Unexpected checkpoint type for aggtrades resume state");
+                        }
+                    }
+                }
+                Ok((None, None))
+            }
+            Err(e) => {
+                if let crate::resume::state::ResumeError::SchemaVersionMismatch {
+                    expected,
+                    found,
+                } = &e
+                {
+                    return Err(DownloadError::IncompatibleResumeState {
+                        expected: expected.clone(),
+                        found: found.clone(),
+                        path: path.display().to_string(),
+                    });
+                }
+                error!(
+                    error = %e,
+                    path = %path.display(),
+                    "CRITICAL: Resume state is corrupt or unreadable. \
+                     Use --resume reset to clear and start fresh, or delete the file manually."
+                );
+                Err(DownloadError::IoError(format!(
+                    "Corrupt resume state at {}: {}. Use --resume reset to clear.",
+                    path.display(),
+                    e
+                )))
             }
         }
     }
 
     /// Save checkpoint during download (T080, T168)
+    ///
+    /// Wraps blocking file I/O in `spawn_blocking` to avoid blocking the
+    /// async runtime (P1-7).
     async fn save_checkpoint(
         &self,
         job: &DownloadJob,
         checkpoint: Checkpoint,
     ) -> Result<(), DownloadError> {
         if let Some(path) = self.get_resume_state_path(job) {
-            let mut state = if path.exists() {
-                ResumeState::load(&path)
-                    .map_err(|e| DownloadError::IoError(format!("Failed to load state: {e}")))?
-            } else {
-                ResumeState::new(
-                    job.identifier.clone(),
-                    job.symbol.clone(),
-                    match job.job_type {
-                        crate::downloader::JobType::Bars { interval } => Some(interval.to_string()),
-                        _ => None,
-                    },
-                    match job.job_type {
-                        crate::downloader::JobType::Bars { .. } => "bars".to_string(),
-                        crate::downloader::JobType::AggTrades => "aggtrades".to_string(),
-                        crate::downloader::JobType::FundingRates => "funding".to_string(),
-                    },
-                )
-            };
+            let identifier = job.identifier.clone();
+            let symbol = job.symbol.clone();
+            let job_type = job.job_type;
+            let path_clone = path.clone();
 
-            // Log checkpoint info before moving it
-            debug!(
-                checkpoint_type = ?checkpoint.checkpoint_type(),
-                "Saving checkpoint to resume state"
-            );
+            tokio::task::spawn_blocking(move || {
+                let mut state = if path_clone.exists() {
+                    ResumeState::load(&path_clone)
+                        .map_err(|e| DownloadError::IoError(format!("Failed to load state: {e}")))?
+                } else {
+                    ResumeState::new(
+                        identifier,
+                        symbol,
+                        match job_type {
+                            crate::downloader::JobType::Bars { interval } => {
+                                Some(interval.to_string())
+                            }
+                            _ => None,
+                        },
+                        match job_type {
+                            crate::downloader::JobType::Bars { .. } => "bars".to_string(),
+                            crate::downloader::JobType::AggTrades => "aggtrades".to_string(),
+                            crate::downloader::JobType::FundingRates => "funding".to_string(),
+                        },
+                    )
+                };
 
-            state.add_checkpoint(checkpoint);
+                debug!(
+                    checkpoint_type = ?checkpoint.checkpoint_type(),
+                    "Saving checkpoint to resume state"
+                );
 
-            state
-                .save(&path)
-                .map_err(|e| DownloadError::IoError(format!("Failed to save checkpoint: {e}")))?;
+                state.add_checkpoint(checkpoint);
 
-            debug!(
-                total_checkpoints = state.checkpoints().len(),
-                "Checkpoint saved"
-            );
+                state.save(&path_clone).map_err(|e| {
+                    DownloadError::IoError(format!("Failed to save checkpoint: {e}"))
+                })?;
+
+                debug!(
+                    total_checkpoints = state.checkpoints().len(),
+                    "Checkpoint saved"
+                );
+
+                Ok::<(), DownloadError>(())
+            })
+            .await
+            .map_err(|e| DownloadError::IoError(format!("spawn_blocking join error: {e}")))??;
         }
 
         Ok(())
@@ -411,7 +560,7 @@ impl DownloadExecutor {
         };
 
         // Load resume state
-        let resume_time = self.load_resume_state(&job)?;
+        let resume_time = self.load_resume_state(&job).await?;
         let mut start_time = resume_time.unwrap_or(job.start_time);
         if resume_time.is_some() {
             job.progress.current_position = Some(start_time);
@@ -519,11 +668,12 @@ impl DownloadExecutor {
         // Validate job
         job.validate().map_err(DownloadError::ValidationError)?;
 
-        // Load resume state
-        let resume_time = self.load_resume_state(&job)?;
-        let mut start_time = resume_time.unwrap_or(job.start_time);
-        if resume_time.is_some() {
-            job.progress.current_position = Some(start_time);
+        // Load resume state (aggtrades uses cursor-based resume with trade IDs)
+        let (resume_trade_id, resume_timestamp) = self.load_aggtrades_resume_state(&job).await?;
+        let mut from_id: Option<i64> = resume_trade_id.map(|id| id + 1);
+        let mut start_time = resume_timestamp.unwrap_or(job.start_time);
+        if resume_trade_id.is_some() || resume_timestamp.is_some() {
+            job.progress.current_position = resume_timestamp.or(Some(job.start_time));
         }
 
         // P0-3: If output exists and not forcing, skip/adjust to avoid redundant downloads
@@ -536,7 +686,7 @@ impl DownloadExecutor {
                     job.progress.current_position = Some(max_ts);
                     return Ok(job.progress.clone());
                 }
-                if adjusted > start_time {
+                if adjusted > start_time && from_id.is_none() {
                     info!(
                         start_time = adjusted,
                         "Adjusting aggTrades start_time to coverage end + 1"
@@ -576,6 +726,7 @@ impl DownloadExecutor {
                 &*fetcher,
                 &mut writer,
                 &mut start_time,
+                &mut from_id,
                 &mut progress_state,
             )
             .await;
@@ -617,7 +768,7 @@ impl DownloadExecutor {
         job.validate().map_err(DownloadError::ValidationError)?;
 
         // Load resume state
-        let resume_time = self.load_resume_state(&job)?;
+        let resume_time = self.load_resume_state(&job).await?;
         let mut start_time = resume_time.unwrap_or(job.start_time);
         if resume_time.is_some() {
             job.progress.current_position = Some(start_time);
@@ -731,8 +882,24 @@ impl DownloadExecutor {
                 .await
             {
                 Ok(mut stream) => {
-                    // Process stream
-                    while let Some(result) = stream.next().await {
+                    // Process stream with shutdown awareness (P2-1)
+                    loop {
+                        let next_item = if let Some(shutdown) = &self.shutdown {
+                            tokio::select! {
+                                item = stream.next() => item,
+                                _ = shutdown.wait_for_shutdown() => {
+                                    return self.abort_due_to_shutdown(job).await;
+                                }
+                            }
+                        } else {
+                            stream.next().await
+                        };
+
+                        let result = match next_item {
+                            Some(r) => r,
+                            None => break,
+                        };
+
                         match result {
                             Ok(bar) => {
                                 // Write bar using safe enum dispatch
@@ -759,10 +926,6 @@ impl DownloadExecutor {
                                         progress_state.format_progress()
                                     );
                                     progress_state.mark_emitted();
-                                }
-
-                                if self.shutdown_requested() {
-                                    return self.abort_due_to_shutdown(job).await;
                                 }
 
                                 // Save checkpoint at intervals
@@ -828,12 +991,16 @@ impl DownloadExecutor {
     }
 
     /// Download aggTrades with retry logic - type-safe version for trades
+    ///
+    /// Uses agg_trade_id-based checkpointing for precise resume capability.
+    /// The `from_id` parameter allows resuming from a specific trade ID.
     async fn download_aggtrades_with_retry(
         &self,
         job: &mut DownloadJob,
         fetcher: &dyn DataFetcher,
         writer: &mut WriterType,
         start_time: &mut i64,
+        from_id: &mut Option<i64>,
         progress_state: &mut ProgressState,
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
@@ -847,12 +1014,28 @@ impl DownloadExecutor {
                 return self.abort_due_to_shutdown(job).await;
             }
             match fetcher
-                .fetch_aggtrades_stream(&job.symbol, *start_time, job.end_time)
+                .fetch_aggtrades_stream(&job.symbol, *start_time, job.end_time, *from_id)
                 .await
             {
                 Ok(mut stream) => {
-                    // Process stream
-                    while let Some(result) = stream.next().await {
+                    // Process stream with shutdown awareness (P2-1)
+                    loop {
+                        let next_item = if let Some(shutdown) = &self.shutdown {
+                            tokio::select! {
+                                item = stream.next() => item,
+                                _ = shutdown.wait_for_shutdown() => {
+                                    return self.abort_due_to_shutdown(job).await;
+                                }
+                            }
+                        } else {
+                            stream.next().await
+                        };
+
+                        let result = match next_item {
+                            Some(r) => r,
+                            None => break,
+                        };
+
                         match result {
                             Ok(trade) => {
                                 // Write trade using safe enum dispatch
@@ -873,15 +1056,10 @@ impl DownloadExecutor {
                                     progress_state.mark_emitted();
                                 }
 
-                                if self.shutdown_requested() {
-                                    return self.abort_due_to_shutdown(job).await;
-                                }
-
-                                // Save checkpoint at intervals
+                                // Save cursor-based checkpoint at intervals using agg_trade_id
                                 if job.progress.downloaded_bars % CHECKPOINT_INTERVAL_TRADES == 0 {
-                                    let checkpoint = Checkpoint::time_window(
-                                        job.start_time,
-                                        timestamp,
+                                    let checkpoint = Checkpoint::cursor(
+                                        format!("aggtrade_id:{}", trade.agg_trade_id),
                                         job.progress.downloaded_bars,
                                         0,
                                     );
@@ -928,6 +1106,8 @@ impl DownloadExecutor {
             // Continue from last known position
             if let Some(pos) = job.progress.current_position {
                 *start_time = pos + 1;
+                // Clear from_id on retry - use timestamp-based resume after stream errors
+                *from_id = None;
             }
         }
 
@@ -958,8 +1138,24 @@ impl DownloadExecutor {
                 .await
             {
                 Ok(mut stream) => {
-                    // Process stream
-                    while let Some(result) = stream.next().await {
+                    // Process stream with shutdown awareness (P2-1)
+                    loop {
+                        let next_item = if let Some(shutdown) = &self.shutdown {
+                            tokio::select! {
+                                item = stream.next() => item,
+                                _ = shutdown.wait_for_shutdown() => {
+                                    return self.abort_due_to_shutdown(job).await;
+                                }
+                            }
+                        } else {
+                            stream.next().await
+                        };
+
+                        let result = match next_item {
+                            Some(r) => r,
+                            None => break,
+                        };
+
                         match result {
                             Ok(rate) => {
                                 // Write funding rate using safe enum dispatch
@@ -978,10 +1174,6 @@ impl DownloadExecutor {
                                         progress_state.format_progress()
                                     );
                                     progress_state.mark_emitted();
-                                }
-
-                                if self.shutdown_requested() {
-                                    return self.abort_due_to_shutdown(job).await;
                                 }
 
                                 // Save checkpoint at intervals

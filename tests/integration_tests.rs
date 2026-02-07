@@ -17,6 +17,7 @@ mod integration {
     pub mod rate_limiting;
     pub mod resume_capability;
     pub mod retry_behavior;
+    pub mod signal_handling;
     pub mod symbol_discovery;
     pub mod validation;
 }

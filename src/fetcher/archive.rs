@@ -22,6 +22,11 @@ use super::{FetcherError, FetcherResult};
 const BINANCE_VISION_BASE_URL: &str = "https://data.binance.vision";
 const ARCHIVE_PATH_TEMPLATE: &str = "/data/futures/um/daily/klines";
 
+/// Maximum compressed archive size (100 MB)
+const MAX_COMPRESSED_SIZE: u64 = 100 * 1024 * 1024;
+/// Maximum decompressed content size (500 MB)
+const MAX_DECOMPRESSED_SIZE: u64 = 500 * 1024 * 1024;
+
 /// Archive downloader for Binance Vision historical data
 ///
 /// Uses the global HTTP client with proper timeouts (F038):
@@ -130,6 +135,15 @@ impl ArchiveDownloader {
             .await
             .map_err(|e| FetcherError::NetworkError(e.to_string()))?;
 
+        // Zip bomb protection: check compressed size
+        if archive_bytes.len() as u64 > MAX_COMPRESSED_SIZE {
+            return Err(FetcherError::ArchiveError(format!(
+                "Archive too large: {} bytes exceeds {} byte limit",
+                archive_bytes.len(),
+                MAX_COMPRESSED_SIZE
+            )));
+        }
+
         // Write to temporary file
         let filename = archive_url
             .split('/')
@@ -137,7 +151,8 @@ impl ArchiveDownloader {
             .ok_or_else(|| FetcherError::ArchiveError("Invalid archive URL".to_string()))?;
         let temp_path = temp_dir.path().join(filename);
 
-        std::fs::write(&temp_path, &archive_bytes)
+        tokio::fs::write(&temp_path, &archive_bytes)
+            .await
             .map_err(|e| FetcherError::ArchiveError(format!("Failed to write temp file: {e}")))?;
 
         debug!(
@@ -243,6 +258,15 @@ impl ArchiveDownloader {
         let mut file = archive
             .by_index(0)
             .map_err(|e| FetcherError::ArchiveError(format!("Failed to read ZIP entry: {e}")))?;
+
+        // Zip bomb protection: check decompressed size
+        if file.size() > MAX_DECOMPRESSED_SIZE {
+            return Err(FetcherError::ArchiveError(format!(
+                "Decompressed file too large: {} bytes exceeds {} byte limit",
+                file.size(),
+                MAX_DECOMPRESSED_SIZE
+            )));
+        }
 
         // Read CSV contents
         let mut csv_content = String::new();

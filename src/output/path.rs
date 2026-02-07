@@ -238,7 +238,7 @@ impl OutputPathBuilder {
         }
 
         let exchange = parts[0].to_lowercase();
-        let settlement = parts.get(2).copied().unwrap_or("");
+        let settlement = parts.get(2).copied().unwrap_or("").to_uppercase();
 
         let market_type = if settlement.is_empty() {
             "spot"
@@ -297,6 +297,14 @@ pub struct MonthRange {
 ///
 /// Vector of [`MonthRange`] structs, one for each month in the range
 pub fn split_into_month_ranges(start_ms: i64, end_ms: i64) -> Vec<MonthRange> {
+    if end_ms <= start_ms {
+        return Vec::new();
+    }
+
+    // Safety cap: 50 years of monthly ranges (600 months) prevents infinite loops
+    // from invalid timestamps that could cause YearMonth::from_timestamp_ms fallback issues
+    const MAX_MONTHS: usize = 600;
+
     let mut ranges = Vec::new();
     let mut current_month = YearMonth::from_timestamp_ms(start_ms);
     let mut current_start_ms = start_ms;
@@ -311,7 +319,7 @@ pub fn split_into_month_ranges(start_ms: i64, end_ms: i64) -> Vec<MonthRange> {
             end_ms: range_end_ms,
         });
 
-        if range_end_ms >= end_ms {
+        if range_end_ms >= end_ms || ranges.len() >= MAX_MONTHS {
             break;
         }
 
@@ -320,4 +328,69 @@ pub fn split_into_month_ranges(start_ms: i64, end_ms: i64) -> Vec<MonthRange> {
     }
 
     ranges
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_venue_case_insensitive_settlement() {
+        // Lowercase "usdt" should be treated the same as "USDT"
+        let venue_upper = OutputPathBuilder::extract_venue("BINANCE:BTC/USDT:USDT");
+        let venue_lower = OutputPathBuilder::extract_venue("BINANCE:BTC/USDT:usdt");
+        assert_eq!(venue_upper, venue_lower);
+        assert!(venue_upper.contains("futures_usdt"));
+    }
+
+    #[test]
+    fn test_venue_case_insensitive_btc_settlement() {
+        let venue_upper = OutputPathBuilder::extract_venue("BINANCE:BTC/USD:BTC");
+        let venue_lower = OutputPathBuilder::extract_venue("BINANCE:BTC/USD:btc");
+        assert_eq!(venue_upper, venue_lower);
+        assert!(venue_upper.contains("futures_coin"));
+    }
+
+    #[test]
+    fn test_month_range_end_before_start() {
+        let ranges = split_into_month_ranges(2000, 1000);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_month_range_end_equals_start() {
+        let ranges = split_into_month_ranges(1000, 1000);
+        assert!(ranges.is_empty());
+    }
+
+    #[test]
+    fn test_split_into_month_ranges_single_month() {
+        // Jan 1 2024 to Jan 15 2024
+        let start = 1704067200000; // 2024-01-01 00:00:00 UTC
+        let end = 1705276800000; // 2024-01-15 00:00:00 UTC
+        let ranges = split_into_month_ranges(start, end);
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(ranges[0].month.year, 2024);
+        assert_eq!(ranges[0].month.month, 1);
+    }
+
+    #[test]
+    fn test_split_into_month_ranges_cross_month() {
+        // Jan 15 2024 to Feb 15 2024
+        let start = 1705276800000; // 2024-01-15 00:00:00 UTC
+        let end = 1707955200000; // 2024-02-15 00:00:00 UTC
+        let ranges = split_into_month_ranges(start, end);
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0].month.month, 1);
+        assert_eq!(ranges[1].month.month, 2);
+    }
+
+    #[test]
+    fn test_split_into_month_ranges_safety_cap() {
+        // Extremely large range: should be capped at MAX_MONTHS (600)
+        let start = 0; // 1970-01-01
+        let end = i64::MAX; // far future
+        let ranges = split_into_month_ranges(start, end);
+        assert_eq!(ranges.len(), 600);
+    }
 }

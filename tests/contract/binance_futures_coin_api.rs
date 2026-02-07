@@ -93,7 +93,7 @@ async fn test_coin_aggtrades_endpoint() {
     let start_time = end_time - 1800_000; // 30 minutes ago
 
     let result = fetcher
-        .fetch_aggtrades_stream("BTCUSD_PERP", start_time, end_time)
+        .fetch_aggtrades_stream("BTCUSD_PERP", start_time, end_time, None)
         .await;
 
     assert!(result.is_ok(), "DAPI aggTrades request should succeed");

@@ -69,6 +69,7 @@ impl SourcesCommand {
 
         // For each identifier, fetch symbols if it's BINANCE
         let mut all_results = Vec::new();
+        let mut failures: Vec<(String, String)> = Vec::new();
 
         for identifier in identifiers {
             let identifier_str = identifier.to_string();
@@ -97,6 +98,7 @@ impl SourcesCommand {
                             }
                         }
                         Err(e) => {
+                            failures.push((identifier_str.to_string(), e.to_string()));
                             eprintln!("Error fetching symbols for {identifier_str}: {e}");
                         }
                     }
@@ -124,10 +126,17 @@ impl SourcesCommand {
                             }
                         }
                         Err(e) => {
+                            failures.push((identifier_str.to_string(), e.to_string()));
                             eprintln!("Error fetching symbols for {identifier_str}: {e}");
                         }
                     }
                 }
+            }
+        }
+
+        if !failures.is_empty() {
+            for (id, err) in &failures {
+                eprintln!("Warning: failed to fetch symbols for {}: {}", id, err);
             }
         }
 

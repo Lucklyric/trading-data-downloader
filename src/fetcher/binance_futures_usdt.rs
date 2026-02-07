@@ -139,19 +139,31 @@ impl BinanceFuturesUsdtFetcher {
             .ok_or_else(|| FetcherError::ParseError("Missing or invalid marginAsset".to_string()))?
             .to_string();
 
-        let price_precision = symbol_data
+        let price_precision_raw = symbol_data
             .get("pricePrecision")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| {
                 FetcherError::ParseError("Missing or invalid pricePrecision".to_string())
-            })? as u8;
+            })?;
+        let price_precision = u8::try_from(price_precision_raw).map_err(|_| {
+            FetcherError::ParseError(format!(
+                "pricePrecision {} exceeds u8 range",
+                price_precision_raw
+            ))
+        })?;
 
-        let quantity_precision = symbol_data
+        let quantity_precision_raw = symbol_data
             .get("quantityPrecision")
             .and_then(|v| v.as_u64())
             .ok_or_else(|| {
                 FetcherError::ParseError("Missing or invalid quantityPrecision".to_string())
-            })? as u8;
+            })?;
+        let quantity_precision = u8::try_from(quantity_precision_raw).map_err(|_| {
+            FetcherError::ParseError(format!(
+                "quantityPrecision {} exceeds u8 range",
+                quantity_precision_raw
+            ))
+        })?;
 
         // Extract tick_size and step_size from filters
         let filters = symbol_data
@@ -595,17 +607,21 @@ impl BinanceFuturesUsdtFetcher {
     /// Create a stream of aggTrades with automatic 1-hour window chunking and pagination (T114, T116, T119)
     /// Handles the 1-hour API constraint by splitting the time range into 1-hour chunks
     /// Within each chunk, uses fromId pagination to fetch all trades
+    ///
+    /// # Arguments
+    /// * `from_id` - Optional starting trade ID for resume; used as initial `last_trade_id`
     fn create_aggtrades_stream(
         &self,
         symbol: String,
         start_time: i64,
         end_time: i64,
+        from_id: Option<i64>,
     ) -> AggTradeStream {
         let fetcher = self.clone();
 
         // State: (current_chunk_start, current_chunk_end, last_trade_id, done)
         let stream = stream::unfold(
-            (start_time, None, None, false),
+            (start_time, None, from_id, false),
             move |(chunk_start, chunk_end_opt, last_trade_id, done)| {
                 let fetcher = fetcher.clone();
                 let symbol = symbol.clone();
@@ -635,6 +651,12 @@ impl BinanceFuturesUsdtFetcher {
                         .await
                     {
                         Ok(trades) => {
+                            // Filter trades to respect chunk_end boundary
+                            let trades: Vec<AggTrade> = trades
+                                .into_iter()
+                                .filter(|t| t.timestamp < chunk_end)
+                                .collect();
+
                             if trades.is_empty() {
                                 // No more trades in current chunk, move to next chunk
                                 if chunk_end >= end_time {
@@ -755,10 +777,11 @@ impl DataFetcher for BinanceFuturesUsdtFetcher {
         symbol: &str,
         start_time: i64,
         end_time: i64,
+        from_id: Option<i64>,
     ) -> FetcherResult<super::AggTradeStream> {
         info!(
-            "Creating aggTrades stream: symbol={}, range=[{}, {})",
-            symbol, start_time, end_time
+            "Creating aggTrades stream: symbol={}, range=[{}, {}), from_id={:?}",
+            symbol, start_time, end_time, from_id
         );
 
         // Calculate number of 1-hour chunks
@@ -766,7 +789,7 @@ impl DataFetcher for BinanceFuturesUsdtFetcher {
         let chunks = (duration + ONE_HOUR_MS - 1) / ONE_HOUR_MS;
         debug!("Will fetch aggTrades across {} one-hour chunks", chunks);
 
-        Ok(self.create_aggtrades_stream(symbol.to_string(), start_time, end_time))
+        Ok(self.create_aggtrades_stream(symbol.to_string(), start_time, end_time, from_id))
     }
 
     /// T138: Fetch funding rates as a stream
@@ -843,5 +866,58 @@ mod tests {
     fn test_fetcher_initialization() {
         let fetcher = BinanceFuturesUsdtFetcher::new(5);
         assert!(fetcher.base_url().contains("fapi.binance.com"));
+    }
+
+    #[test]
+    fn test_precision_truncation_rejects_overflow() {
+        // Build a symbol JSON with pricePrecision > u8::MAX
+        let symbol_data = json!({
+            "symbol": "BTCUSDT",
+            "pair": "BTCUSDT",
+            "contractType": "PERPETUAL",
+            "status": "TRADING",
+            "baseAsset": "BTC",
+            "quoteAsset": "USDT",
+            "marginAsset": "USDT",
+            "pricePrecision": 300u64,  // exceeds u8 max (255)
+            "quantityPrecision": 3,
+            "filters": [
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                {"filterType": "LOT_SIZE", "stepSize": "0.001"}
+            ]
+        });
+
+        let result = BinanceFuturesUsdtFetcher::parse_symbol(&symbol_data);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("pricePrecision") && err_msg.contains("exceeds u8 range"),
+            "Error should mention pricePrecision overflow, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_precision_truncation_accepts_valid() {
+        let symbol_data = json!({
+            "symbol": "BTCUSDT",
+            "pair": "BTCUSDT",
+            "contractType": "PERPETUAL",
+            "status": "TRADING",
+            "baseAsset": "BTC",
+            "quoteAsset": "USDT",
+            "marginAsset": "USDT",
+            "pricePrecision": 8,
+            "quantityPrecision": 3,
+            "filters": [
+                {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                {"filterType": "LOT_SIZE", "stepSize": "0.001"}
+            ]
+        });
+
+        let result = BinanceFuturesUsdtFetcher::parse_symbol(&symbol_data);
+        assert!(result.is_ok());
+        let symbol = result.unwrap();
+        assert_eq!(symbol.price_precision, 8);
+        assert_eq!(symbol.quantity_precision, 3);
     }
 }
