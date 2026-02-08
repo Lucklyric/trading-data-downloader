@@ -850,7 +850,7 @@ impl DownloadExecutor {
         &self,
         job: &mut DownloadJob,
         start_time: &mut i64,
-        extra_condition: bool,
+        adjust_start_time: bool,
     ) -> Option<JobProgress> {
         if self.force || !job.output_path.exists() {
             return None;
@@ -863,7 +863,7 @@ impl DownloadExecutor {
                 job.progress.current_position = Some(max_ts);
                 return Some(job.progress.clone());
             }
-            if adjusted > *start_time && extra_condition {
+            if adjusted > *start_time && adjust_start_time {
                 info!(
                     start_time = adjusted,
                     "Adjusting start_time to existing coverage end + 1"

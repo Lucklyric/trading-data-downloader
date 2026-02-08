@@ -477,23 +477,23 @@ impl BinanceFuturesBase {
                         .await
                     {
                         Ok(trades) => {
-                            let trades: Vec<AggTrade> = trades
+                            let filtered_trades: Vec<AggTrade> = trades
                                 .into_iter()
                                 .filter(|t| t.timestamp < chunk_end)
                                 .collect();
 
-                            if trades.is_empty() {
+                            if filtered_trades.is_empty() {
                                 if chunk_end >= end_time {
                                     return None;
                                 }
                                 let next_chunk_start = chunk_end;
                                 Some((stream::iter(vec![]), (next_chunk_start, None, None, false)))
                             } else {
-                                let last_trade = trades.last().unwrap();
+                                let last_trade = filtered_trades.last().unwrap();
                                 let next_trade_id = last_trade.agg_trade_id + 1;
 
                                 let items: Vec<FetcherResult<AggTrade>> =
-                                    trades.into_iter().map(Ok).collect();
+                                    filtered_trades.into_iter().map(Ok).collect();
 
                                 if items.len() >= AGGTRADES_LIMIT {
                                     Some((
@@ -574,5 +574,56 @@ impl BinanceFuturesBase {
         .flatten();
 
         Box::pin(stream)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rust_decimal::Decimal;
+    use serde_json::json;
+    use std::str::FromStr;
+
+    #[test]
+    fn test_parse_kline() {
+        let kline_json = json!([
+            1699920000000i64,
+            "35000.50",
+            "35100.00",
+            "34950.00",
+            "35050.75",
+            "1234.567",
+            1699920059999i64,
+            "43210987.65",
+            5432,
+            "617.283",
+            "21605493.82",
+            "0"
+        ]);
+
+        let bars = BinanceParser::parse_klines(vec![kline_json]).unwrap();
+        let bar = &bars[0];
+
+        assert_eq!(bar.open_time, 1699920000000);
+        assert_eq!(bar.close_time, 1699920059999);
+        assert_eq!(bar.trades, 5432);
+        assert_eq!(bar.open, Decimal::from_str("35000.50").unwrap());
+        assert_eq!(bar.high, Decimal::from_str("35100.00").unwrap());
+        assert_eq!(bar.low, Decimal::from_str("34950.00").unwrap());
+        assert_eq!(bar.close, Decimal::from_str("35050.75").unwrap());
+    }
+
+    #[test]
+    fn test_calculate_total_bars() {
+        let start = 1704067200000;
+        let end = 1704070800000;
+        let interval_ms = 60_000;
+
+        let total = calculate_total_bars(start, end, interval_ms);
+        assert_eq!(total, 60);
+
+        let end = 1704153600000;
+        let total = calculate_total_bars(start, end, interval_ms);
+        assert_eq!(total, 1440);
     }
 }

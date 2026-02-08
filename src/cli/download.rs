@@ -7,7 +7,7 @@ use chrono::{DateTime, NaiveDate};
 use clap::{Parser, Subcommand};
 use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::{error, info};
 
@@ -119,7 +119,7 @@ impl FromStr for ResumeMode {
 }
 
 /// Handle Reset mode: delete existing resume directory
-fn handle_resume_reset(resume_dir: &PathBuf) -> Result<(), CliError> {
+fn handle_resume_reset(resume_dir: &Path) -> Result<(), CliError> {
     if resume_dir.exists() {
         info!("Reset mode: deleting existing resume directory: {:?}", resume_dir);
         std::fs::remove_dir_all(resume_dir).map_err(|e| {
@@ -133,7 +133,7 @@ fn handle_resume_reset(resume_dir: &PathBuf) -> Result<(), CliError> {
 }
 
 /// Handle Verify mode: check resume state integrity
-fn handle_resume_verify(resume_dir: &PathBuf) -> Result<(), CliError> {
+fn handle_resume_verify(resume_dir: &Path) -> Result<(), CliError> {
     use crate::resume::ResumeState;
 
     if !resume_dir.exists() {
@@ -391,6 +391,8 @@ struct DataTypeDescriptor {
     data_type_name: &'static str,
     /// Prefix for JSON count fields (e.g., "bars", "trades", "rates")
     json_count_prefix: &'static str,
+    /// Typed data type for dispatch logic
+    data_type: crate::output::DataType,
 }
 
 const BARS_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
@@ -398,6 +400,7 @@ const BARS_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
     count_label: "Bars",
     data_type_name: "bars",
     json_count_prefix: "bars",
+    data_type: crate::output::DataType::Bars,
 };
 
 const AGGTRADES_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
@@ -405,6 +408,7 @@ const AGGTRADES_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
     count_label: "Trades",
     data_type_name: "aggtrades",
     json_count_prefix: "trades",
+    data_type: crate::output::DataType::AggTrades,
 };
 
 const FUNDING_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
@@ -412,6 +416,7 @@ const FUNDING_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
     count_label: "Rates",
     data_type_name: "funding",
     json_count_prefix: "rates",
+    data_type: crate::output::DataType::Funding,
 };
 
 // ─── Unified output functions ────────────────────────────────────────────────
@@ -526,7 +531,7 @@ async fn execute_download_job(params: DownloadJobParams<'_>) -> Result<(), CliEr
             output_path.clone(),
         ),
         None => {
-            if desc.data_type_name == "aggtrades" {
+            if desc.data_type == crate::output::DataType::AggTrades {
                 DownloadJob::new_aggtrades(
                     identifier.to_string(),
                     symbol.to_string(),

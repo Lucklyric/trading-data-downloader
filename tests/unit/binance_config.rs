@@ -20,24 +20,6 @@ fn test_usdt_futures_config() {
 
     // Verify symbol format is Perpetual
     assert_eq!(config.symbol_format, SymbolFormat::Perpetual);
-
-    // Test URL construction helpers
-    assert_eq!(
-        config.klines_url(),
-        "https://fapi.binance.com/fapi/v1/klines"
-    );
-    assert_eq!(
-        config.aggtrades_url(),
-        "https://fapi.binance.com/fapi/v1/aggTrades"
-    );
-    assert_eq!(
-        config.funding_url(),
-        "https://fapi.binance.com/fapi/v1/fundingRate"
-    );
-    assert_eq!(
-        config.exchange_info_url(),
-        "https://fapi.binance.com/fapi/v1/exchangeInfo"
-    );
 }
 
 /// T224: Test COIN_FUTURES_CONFIG validation
@@ -56,24 +38,6 @@ fn test_coin_futures_config() {
 
     // Verify symbol format is CoinPerpetual
     assert_eq!(config.symbol_format, SymbolFormat::CoinPerpetual);
-
-    // Test URL construction helpers
-    assert_eq!(
-        config.klines_url(),
-        "https://dapi.binance.com/dapi/v1/klines"
-    );
-    assert_eq!(
-        config.aggtrades_url(),
-        "https://dapi.binance.com/dapi/v1/aggTrades"
-    );
-    assert_eq!(
-        config.funding_url(),
-        "https://dapi.binance.com/dapi/v1/fundingRate"
-    );
-    assert_eq!(
-        config.exchange_info_url(),
-        "https://dapi.binance.com/dapi/v1/exchangeInfo"
-    );
 }
 
 /// Test that configs can be cloned

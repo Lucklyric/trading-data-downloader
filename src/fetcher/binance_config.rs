@@ -32,14 +32,6 @@ pub enum SymbolFormat {
 /// Binance enforces 2400 weight per minute per IP. Using incorrect weights can
 /// lead to HTTP 429 errors and potential IP bans.
 ///
-/// # Examples
-///
-/// ```
-/// use trading_data_downloader::fetcher::binance_config::USDT_FUTURES_CONFIG;
-///
-/// let klines_url = USDT_FUTURES_CONFIG.klines_url();
-/// assert_eq!(klines_url, "https://fapi.binance.com/fapi/v1/klines");
-/// ```
 #[derive(Debug, Clone)]
 pub struct BinanceMarketConfig {
     /// Base URL for API (e.g., <https://fapi.binance.com>)
@@ -128,46 +120,3 @@ pub const COIN_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
     exchange_info_weight: 10,
     status_field_name: "contractStatus",
 };
-
-impl BinanceMarketConfig {
-    /// Get full URL for klines endpoint
-    ///
-    /// # Returns
-    /// Complete URL by combining base_url + klines_endpoint
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use trading_data_downloader::fetcher::binance_config::USDT_FUTURES_CONFIG;
-    ///
-    /// let url = USDT_FUTURES_CONFIG.klines_url();
-    /// assert_eq!(url, "https://fapi.binance.com/fapi/v1/klines");
-    /// ```
-    pub fn klines_url(&self) -> String {
-        format!("{}{}", self.base_url, self.klines_endpoint)
-    }
-
-    /// Get full URL for aggTrades endpoint
-    ///
-    /// # Returns
-    /// Complete URL by combining base_url + aggtrades_endpoint
-    pub fn aggtrades_url(&self) -> String {
-        format!("{}{}", self.base_url, self.aggtrades_endpoint)
-    }
-
-    /// Get full URL for funding rate endpoint
-    ///
-    /// # Returns
-    /// Complete URL by combining base_url + funding_endpoint
-    pub fn funding_url(&self) -> String {
-        format!("{}{}", self.base_url, self.funding_endpoint)
-    }
-
-    /// Get full URL for exchange info endpoint
-    ///
-    /// # Returns
-    /// Complete URL by combining base_url + exchange_info_endpoint
-    pub fn exchange_info_url(&self) -> String {
-        format!("{}{}", self.base_url, self.exchange_info_endpoint)
-    }
-}

@@ -122,53 +122,6 @@ impl DataFetcher for BinanceFuturesCoinFetcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fetcher::binance_parser::BinanceParser;
-    use rust_decimal::Decimal;
-    use serde_json::json;
-    use std::str::FromStr;
-
-    #[test]
-    fn test_parse_kline() {
-        let kline_json = json!([
-            1699920000000i64,
-            "35000.50",
-            "35100.00",
-            "34950.00",
-            "35050.75",
-            "1234.567",
-            1699920059999i64,
-            "43210987.65",
-            5432,
-            "617.283",
-            "21605493.82",
-            "0"
-        ]);
-
-        let bars = BinanceParser::parse_klines(vec![kline_json]).unwrap();
-        let bar = &bars[0];
-
-        assert_eq!(bar.open_time, 1699920000000);
-        assert_eq!(bar.close_time, 1699920059999);
-        assert_eq!(bar.trades, 5432);
-        assert_eq!(bar.open, Decimal::from_str("35000.50").unwrap());
-        assert_eq!(bar.high, Decimal::from_str("35100.00").unwrap());
-        assert_eq!(bar.low, Decimal::from_str("34950.00").unwrap());
-        assert_eq!(bar.close, Decimal::from_str("35050.75").unwrap());
-    }
-
-    #[test]
-    fn test_calculate_total_bars() {
-        let start = 1704067200000;
-        let end = 1704070800000;
-        let interval_ms = 60_000;
-
-        let total = calculate_total_bars(start, end, interval_ms);
-        assert_eq!(total, 60);
-
-        let end = 1704153600000;
-        let total = calculate_total_bars(start, end, interval_ms);
-        assert_eq!(total, 1440);
-    }
 
     #[test]
     fn test_fetcher_initialization() {
