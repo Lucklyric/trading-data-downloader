@@ -29,34 +29,28 @@
 //! use trading_data_downloader::resume::{ResumeState, Checkpoint, CheckpointType};
 //! use std::path::Path;
 //!
-//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let resume_dir = Path::new("./resume");
-//! let job_id = "binance_btcusdt_bars_1h";
+//! // Create a new resume state
+//! let mut state = ResumeState::new(
+//!     "BINANCE:BTC/USDT:USDT".to_string(),
+//!     "BTCUSDT".to_string(),
+//!     Some("1h".to_string()),
+//!     "bars".to_string(),
+//! );
 //!
-//! // Initialize or load resume state
-//! let mut state = ResumeState::load_or_create(resume_dir, job_id)?;
+//! // Add a checkpoint during download
+//! let checkpoint = Checkpoint::time_window(
+//!     1640995200000, // start_time
+//!     1641081600000, // end_time
+//!     1440,          // record_count
+//!     65536,         // bytes_written
+//! );
+//! state.add_checkpoint(checkpoint);
 //!
-//! // Check if we're resuming
-//! if let Some(checkpoint) = state.last_checkpoint() {
-//!     match checkpoint {
-//!         CheckpointType::LastTimestamp(ts) => {
-//!             println!("Resuming from timestamp: {}", ts);
-//!             // Continue download from ts + 1
-//!         }
-//!         CheckpointType::LastId(id) => {
-//!             println!("Resuming from ID: {}", id);
-//!             // Continue download from id + 1
-//!         }
-//!     }
-//! }
+//! // Save state to disk
+//! state.save(Path::new("./resume/btcusdt_bars.json")).unwrap();
 //!
-//! // During download, periodically save checkpoints
-//! state.save_checkpoint(CheckpointType::LastTimestamp(1640995200000))?;
-//!
-//! // Mark as complete when done
-//! state.mark_complete()?;
-//! # Ok(())
-//! # }
+//! // Load state on resume
+//! let loaded = ResumeState::load(Path::new("./resume/btcusdt_bars.json")).unwrap();
 //! ```
 //!
 //! # Checkpoint Strategy

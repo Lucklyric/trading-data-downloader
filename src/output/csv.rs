@@ -83,92 +83,20 @@ impl CsvBarsWriter {
     }
 
     /// Create a new CSV bars writer with custom buffer size (T169)
-    ///
-    /// # Arguments
-    /// * `path` - Output file path
-    /// * `buffer_size` - Size of write buffer in bytes
-    ///
-    /// # Returns
-    /// New CsvBarsWriter with specified buffer size
     pub fn new_with_buffer_size<P: AsRef<Path>>(path: P, buffer_size: usize) -> OutputResult<Self> {
         let path = path.as_ref();
-        info!(
-            path = %path.display(),
-            buffer_size = buffer_size,
-            "Creating CSV bars writer"
-        );
+        info!(path = %path.display(), buffer_size, "Creating CSV bars writer");
 
-        // Create parent directory if it doesn't exist
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| OutputError::IoError(format!("Failed to create directory: {e}")))?;
-            // Cleanup stale temps for this target (non-fatal)
-            if let Err(e) = cleanup_stale_temp_files_for_target(path) {
-                warn!(error = %e, "Failed to cleanup stale temp files");
-            }
-        }
+        let (writer, existing_rows) = init_csv_writer(path, buffer_size)?;
+        debug!(existing_rows, "CSV bars writer created (atomic temp file)");
 
-        // Create .tmp temp file in same directory
-        let parent_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let prefix = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
-        let tempfile = TempBuilder::new()
-            .prefix(prefix)
-            .suffix(".tmp")
-            .tempfile_in(&parent_dir)
-            .map_err(|e| OutputError::IoError(format!("Failed to create temp file: {e}")))?;
-
-        // P0-4: Append/merge mode - copy existing data to prevent data loss
-        let buf_writer = BufWriter::with_capacity(buffer_size, tempfile);
-        let (csv_writer, existing_rows) = if path.exists()
-            && path.metadata().map(|m| m.len()).unwrap_or(0) > 0
-        {
-            // Existing file: Create writer WITHOUT auto-headers, then copy existing data
-            let mut writer = csv::WriterBuilder::new()
-                .has_headers(false) // Disable auto-headers since we copy manually
-                .from_writer(buf_writer);
-            match copy_existing_csv_to_writer(path, &mut writer) {
-                Ok(count) => {
-                    info!(rows_copied = count, "Existing data copied for append/merge");
-                    (writer, count)
-                }
-                Err(e) => {
-                    // Copy failed but writer already created - continue with it
-                    // New data will be appended without header (dedup prevents issues)
-                    warn!(error = %e, "Failed to copy existing data, continuing without old data");
-                    (writer, 0)
-                }
-            }
-        } else {
-            // New file: Auto-headers enabled (writes header automatically)
-            (Writer::from_writer(buf_writer), 0)
-        };
-
-        debug!(
-            existing_rows = existing_rows,
-            "CSV bars writer created successfully (atomic temp file)"
-        );
-
-        // P0-2: preload dedup cache from existing file (bounded to prevent OOM)
-        let cap = NonZeroUsize::new(DEFAULT_DEDUP_CAPACITY)
-            .expect("DEFAULT_DEDUP_CAPACITY must be non-zero");
-        let mut seen = LruCache::new(cap);
-        if path.exists() {
-            if let Err(e) = load_existing_bars_keys_lru(path, &mut seen) {
-                warn!(error = %e, "Failed to preload dedup keys from bars file");
-            }
-        }
+        let seen_timestamps = init_dedup_cache(path, &["timestamp", "open_time"]);
 
         Ok(Self {
-            writer: csv_writer,
+            writer,
             final_path: path.to_path_buf(),
             bars_written: 0,
-            seen_timestamps: seen,
+            seen_timestamps,
             duplicates_skipped: 0,
         })
     }
@@ -224,36 +152,8 @@ impl OutputWriter for CsvBarsWriter {
     /// Close the writer and finalize output (T073, T169)
     fn close(mut self) -> OutputResult<()> {
         debug!(bars_written = self.bars_written, "Closing CSV bars writer");
-
-        // Final flush
         self.flush()?;
-
-        // Acquire temp file, fsync, then atomically persist to final path
-        // P0-4: No need to remove_file() - temp contains complete data (old + new)
-        let buf_writer = self
-            .writer
-            .into_inner()
-            .map_err(|e| OutputError::IoError(format!("Failed to get inner writer: {e}")))?;
-        let tmp = buf_writer
-            .into_inner()
-            .map_err(|e| OutputError::IoError(format!("Failed to get temp file handle: {e}")))?;
-        tmp.as_file()
-            .sync_all()
-            .map_err(|e| OutputError::IoError(format!("Failed to sync temp file: {e}")))?;
-        tmp.persist(&self.final_path).map_err(|e| {
-            OutputError::IoError(format!(
-                "Atomic persist to {} failed: {}",
-                self.final_path.display(),
-                e
-            ))
-        })?;
-
-        // Fsync parent directory to ensure the rename is durable
-        if let Some(parent) = self.final_path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
-        }
+        atomic_persist(self.writer, &self.final_path)?;
 
         info!(
             bars_written = self.bars_written,
@@ -318,81 +218,17 @@ impl CsvAggTradesWriter {
     }
 
     /// Create a new CSV aggTrades writer with custom buffer size
-    ///
-    /// # Arguments
-    /// * `path` - Output file path
-    /// * `buffer_size` - Size of write buffer in bytes
-    ///
-    /// # Returns
-    /// New CsvAggTradesWriter with specified buffer size
     pub fn new_with_buffer_size<P: AsRef<Path>>(path: P, buffer_size: usize) -> OutputResult<Self> {
         let path = path.as_ref();
-        info!("Creating CSV aggTrades writer: path={}", path.display());
+        info!(path = %path.display(), "Creating CSV aggTrades writer");
 
-        // Create parent directory if it doesn't exist
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| OutputError::IoError(format!("Failed to create directory: {e}")))?;
-            if let Err(e) = cleanup_stale_temp_files_for_target(path) {
-                warn!(error = %e, "Failed to cleanup stale temp files");
-            }
-        }
+        let (writer, existing_rows) = init_csv_writer(path, buffer_size)?;
+        debug!(existing_rows, "CSV aggTrades writer created (atomic temp file)");
 
-        let parent_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        let prefix = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
-        let tempfile = TempBuilder::new()
-            .prefix(prefix)
-            .suffix(".tmp")
-            .tempfile_in(&parent_dir)
-            .map_err(|e| OutputError::IoError(format!("Failed to create temp file: {e}")))?;
-
-        // P0-4: Append/merge mode - copy existing data to prevent data loss
-        let buf_writer = BufWriter::with_capacity(buffer_size, tempfile);
-        let (csv_writer, existing_rows) =
-            if path.exists() && path.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
-                let mut writer = csv::WriterBuilder::new()
-                    .has_headers(false)
-                    .from_writer(buf_writer);
-                match copy_existing_csv_to_writer(path, &mut writer) {
-                    Ok(count) => {
-                        info!(
-                            rows_copied = count,
-                            "Existing aggTrades data copied for append/merge"
-                        );
-                        (writer, count)
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to copy existing aggTrades data");
-                        (writer, 0)
-                    }
-                }
-            } else {
-                (Writer::from_writer(buf_writer), 0)
-            };
-
-        debug!(
-            existing_rows = existing_rows,
-            "CSV aggTrades writer created (atomic temp file)"
-        );
-
-        // P0-2: preload dedup IDs (bounded to prevent OOM)
-        let cap = NonZeroUsize::new(DEFAULT_DEDUP_CAPACITY)
-            .expect("DEFAULT_DEDUP_CAPACITY must be non-zero");
-        let mut seen_ids = LruCache::new(cap);
-        if path.exists() {
-            if let Err(e) = load_existing_aggtrade_ids_lru(path, &mut seen_ids) {
-                warn!(error = %e, "Failed to preload dedup IDs from aggtrades");
-            }
-        }
+        let seen_ids = init_dedup_cache(path, &["trade_id", "agg_trade_id"]);
 
         Ok(Self {
-            writer: csv_writer,
+            writer,
             final_path: path.to_path_buf(),
             trades_written: 0,
             seen_ids,
@@ -463,36 +299,8 @@ impl OutputWriter for CsvAggTradesWriter {
             "Closing CSV aggTrades writer: {} total trades written, {} duplicates skipped",
             self.trades_written, self.duplicates_skipped
         );
-
-        // Final flush
         self.flush()?;
-
-        // Acquire temp file, fsync, then atomically persist to final path
-        // P0-4: No need to remove_file() - temp contains complete data (old + new)
-        let buf_writer = self
-            .writer
-            .into_inner()
-            .map_err(|e| OutputError::IoError(format!("Failed to get inner writer: {e}")))?;
-        let tmp = buf_writer
-            .into_inner()
-            .map_err(|e| OutputError::IoError(format!("Failed to get temp file handle: {e}")))?;
-        tmp.as_file()
-            .sync_all()
-            .map_err(|e| OutputError::IoError(format!("Failed to sync temp file: {e}")))?;
-        tmp.persist(&self.final_path).map_err(|e| {
-            OutputError::IoError(format!(
-                "Atomic persist to {} failed: {}",
-                self.final_path.display(),
-                e
-            ))
-        })?;
-
-        // Fsync parent directory to ensure the rename is durable
-        if let Some(parent) = self.final_path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
-        }
+        atomic_persist(self.writer, &self.final_path)?;
 
         info!(
             "CSV aggTrades writer closed successfully: {} trades written, {} duplicates skipped",
@@ -547,81 +355,21 @@ impl CsvFundingWriter {
     }
 
     /// Create a new CSV funding writer with custom buffer size
-    ///
-    /// # Arguments
-    /// * `path` - Output file path
-    /// * `buffer_size` - Size of write buffer in bytes
-    ///
-    /// # Returns
-    /// New CsvFundingWriter with specified buffer size
     pub fn new_with_buffer_size<P: AsRef<Path>>(path: P, buffer_size: usize) -> OutputResult<Self> {
         let path = path.as_ref();
-        let parent_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        std::fs::create_dir_all(&parent_dir)
-            .map_err(|e| OutputError::IoError(format!("Failed to create directory: {e}")))?;
-        if let Err(e) = cleanup_stale_temp_files_for_target(path) {
-            warn!(error = %e, "Failed to cleanup stale temp files");
-        }
-        let prefix = path
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
-        let tempfile = TempBuilder::new()
-            .prefix(prefix)
-            .suffix(".tmp")
-            .tempfile_in(&parent_dir)
-            .map_err(|e| OutputError::IoError(format!("Failed to create temp file: {e}")))?;
+        info!(path = %path.display(), buffer_size, "Creating CSV funding writer");
 
-        // P0-4: Append/merge mode - copy existing data to prevent data loss
-        let buf_writer = BufWriter::with_capacity(buffer_size, tempfile);
-        let (writer, existing_rows) =
-            if path.exists() && path.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
-                let mut w = csv::WriterBuilder::new()
-                    .has_headers(false)
-                    .from_writer(buf_writer);
-                match copy_existing_csv_to_writer(path, &mut w) {
-                    Ok(count) => {
-                        info!(
-                            rows_copied = count,
-                            "Existing funding data copied for append/merge"
-                        );
-                        (w, count)
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Failed to copy existing funding data");
-                        (w, 0)
-                    }
-                }
-            } else {
-                (Writer::from_writer(buf_writer), 0)
-            };
+        let (writer, existing_rows) = init_csv_writer(path, buffer_size)?;
+        debug!(existing_rows, "CSV funding writer created (atomic temp file)");
 
-        info!(
-            "Created CSV funding writer: path={}, buffer={}, existing_rows={}",
-            path.display(),
-            buffer_size,
-            existing_rows
-        );
-
-        // P0-2: preload dedup keys (bounded to prevent OOM)
-        let cap = NonZeroUsize::new(DEFAULT_DEDUP_CAPACITY)
-            .expect("DEFAULT_DEDUP_CAPACITY must be non-zero");
-        let mut seen = LruCache::new(cap);
-        if path.exists() {
-            if let Err(e) = load_existing_funding_keys_lru(path, &mut seen) {
-                warn!(error = %e, "Failed to preload dedup keys from funding CSV");
-            }
-        }
+        let seen_timestamps = init_dedup_cache(path, &["timestamp", "funding_time"]);
 
         Ok(Self {
             writer,
             final_path: path.to_path_buf(),
             rates_written: 0,
             buffer_size,
-            seen_timestamps: seen,
+            seen_timestamps,
             duplicates_skipped: 0,
         })
     }
@@ -683,36 +431,8 @@ impl OutputWriter for CsvFundingWriter {
             "Closing CSV funding writer: {} total rates written",
             self.rates_written
         );
-
-        // Final flush
         self.flush()?;
-
-        // Acquire temp file, fsync, then atomically persist to final path
-        // P0-4: No need to remove_file() - temp contains complete data (old + new)
-        let buf_writer = self
-            .writer
-            .into_inner()
-            .map_err(|e| OutputError::IoError(format!("Failed to get inner writer: {e}")))?;
-        let tmp = buf_writer
-            .into_inner()
-            .map_err(|e| OutputError::IoError(format!("Failed to get temp file handle: {e}")))?;
-        tmp.as_file()
-            .sync_all()
-            .map_err(|e| OutputError::IoError(format!("Failed to sync temp file: {e}")))?;
-        tmp.persist(&self.final_path).map_err(|e| {
-            OutputError::IoError(format!(
-                "Atomic persist to {} failed: {}",
-                self.final_path.display(),
-                e
-            ))
-        })?;
-
-        // Fsync parent directory to ensure the rename is durable
-        if let Some(parent) = self.final_path.parent() {
-            if let Ok(dir) = std::fs::File::open(parent) {
-                let _ = dir.sync_all();
-            }
-        }
+        atomic_persist(self.writer, &self.final_path)?;
 
         info!(
             "CSV funding writer closed successfully: {} rates written",
@@ -722,7 +442,104 @@ impl OutputWriter for CsvFundingWriter {
     }
 }
 
-// ===== Helpers: cleanup, coverage scan, and existing-key preload (FR-039, FR-043, FR-026) =====
+// ===== Helpers: init, atomic persist, cleanup, coverage scan, and existing-key preload =====
+
+/// Shared initialization for all CSV writers: creates parent dirs, cleans stale temps,
+/// creates a temp file, and optionally copies existing data for append/merge mode (P0-4).
+///
+/// Returns `(csv_writer, existing_rows)`.
+fn init_csv_writer(
+    path: &Path,
+    buffer_size: usize,
+) -> OutputResult<(Writer<BufWriter<NamedTempFile>>, usize)> {
+    let parent_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    std::fs::create_dir_all(&parent_dir)
+        .map_err(|e| OutputError::IoError(format!("Failed to create directory: {e}")))?;
+    if let Err(e) = cleanup_stale_temp_files_for_target(path) {
+        warn!(error = %e, "Failed to cleanup stale temp files");
+    }
+
+    let prefix = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let tempfile = TempBuilder::new()
+        .prefix(prefix)
+        .suffix(".tmp")
+        .tempfile_in(&parent_dir)
+        .map_err(|e| OutputError::IoError(format!("Failed to create temp file: {e}")))?;
+
+    let buf_writer = BufWriter::with_capacity(buffer_size, tempfile);
+    if path.exists() && path.metadata().map(|m| m.len()).unwrap_or(0) > 0 {
+        let mut writer = csv::WriterBuilder::new()
+            .has_headers(false)
+            .from_writer(buf_writer);
+        match copy_existing_csv_to_writer(path, &mut writer) {
+            Ok(count) => {
+                info!(rows_copied = count, "Existing data copied for append/merge");
+                Ok((writer, count))
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to copy existing data, continuing without old data");
+                Ok((writer, 0))
+            }
+        }
+    } else {
+        Ok((Writer::from_writer(buf_writer), 0))
+    }
+}
+
+/// Create a new LRU dedup cache, optionally preloaded from an existing CSV file.
+fn init_dedup_cache(path: &Path, column_names: &[&str]) -> LruCache<i64, ()> {
+    let cap = NonZeroUsize::new(DEFAULT_DEDUP_CAPACITY)
+        .expect("DEFAULT_DEDUP_CAPACITY must be non-zero");
+    let mut cache = LruCache::new(cap);
+    if path.exists() {
+        if let Err(e) = load_existing_keys_lru(path, column_names, &mut cache) {
+            warn!(error = %e, "Failed to preload dedup keys");
+        }
+    }
+    cache
+}
+
+/// Atomically persist a CSV writer to its final path (P0-4)
+///
+/// Unwraps the CSV Writer -> BufWriter -> NamedTempFile chain, syncs data to disk,
+/// atomically renames the temp file to the final path, and fsyncs the parent directory
+/// to ensure rename durability.
+fn atomic_persist(
+    writer: Writer<BufWriter<NamedTempFile>>,
+    final_path: &Path,
+) -> OutputResult<()> {
+    let buf_writer = writer
+        .into_inner()
+        .map_err(|e| OutputError::IoError(format!("Failed to get inner writer: {e}")))?;
+    let tmp = buf_writer
+        .into_inner()
+        .map_err(|e| OutputError::IoError(format!("Failed to get temp file handle: {e}")))?;
+    tmp.as_file()
+        .sync_all()
+        .map_err(|e| OutputError::IoError(format!("Failed to sync temp file: {e}")))?;
+    tmp.persist(final_path).map_err(|e| {
+        OutputError::IoError(format!(
+            "Atomic persist to {} failed: {}",
+            final_path.display(),
+            e
+        ))
+    })?;
+
+    // Fsync parent directory to ensure the rename is durable
+    if let Some(parent) = final_path.parent() {
+        if let Ok(dir) = std::fs::File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+
+    Ok(())
+}
 
 /// Clean up stale .tmp files for a given target output file
 pub fn cleanup_stale_temp_files_for_target<P: AsRef<Path>>(target: P) -> OutputResult<()> {
@@ -841,82 +658,39 @@ fn copy_existing_csv_to_writer<W: std::io::Write>(
     Ok(copied)
 }
 
-/// Load existing bar keys (timestamp) from CSV into LruCache (P0-2: bounded memory)
-/// Supports both "timestamp" (NautilusTrader) and legacy "open_time" column names
-fn load_existing_bars_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
+/// Load existing dedup keys from a CSV column into an LruCache (P0-2: bounded memory)
+///
+/// Searches for the first matching column name from `column_names` and loads all
+/// values from that column into the cache. Supports both current NautilusTrader-compatible
+/// and legacy column names for backward compatibility.
+fn load_existing_keys_lru(
+    path: &Path,
+    column_names: &[&str],
+    out: &mut LruCache<i64, ()>,
+) -> OutputResult<()> {
     if !path.exists() {
         return Ok(());
     }
     let mut rdr = ReaderBuilder::new()
         .has_headers(true)
         .from_path(path)
-        .map_err(|e| OutputError::IoError(format!("Failed to open bars CSV: {e}")))?;
+        .map_err(|e| OutputError::IoError(format!("Failed to open CSV: {e}")))?;
     let headers = rdr
         .headers()
         .map_err(|e| OutputError::CsvError(format!("Failed headers: {e}")))?
         .clone();
-    let ts_index = headers
+    let key_index = column_names
         .iter()
-        .position(|h| h == "timestamp" || h == "open_time")
-        .ok_or_else(|| OutputError::CsvError("timestamp header not found".to_string()))?;
+        .find_map(|name| headers.iter().position(|h| h == *name))
+        .ok_or_else(|| {
+            OutputError::CsvError(format!(
+                "None of {column_names:?} found in CSV headers"
+            ))
+        })?;
     for rec in rdr.records() {
         let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
-        if let Some(ts) = parse_i64(rec.get(ts_index)) {
-            out.put(ts, ());
-        }
-    }
-    Ok(())
-}
-
-/// Load existing aggtrade IDs from CSV into LruCache (P0-2: bounded memory)
-/// Supports both "trade_id" (NautilusTrader) and legacy "agg_trade_id" column names
-fn load_existing_aggtrade_ids_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(path)
-        .map_err(|e| OutputError::IoError(format!("Failed to open aggtrades CSV: {e}")))?;
-    let headers = rdr
-        .headers()
-        .map_err(|e| OutputError::CsvError(format!("Failed headers: {e}")))?
-        .clone();
-    let id_index = headers
-        .iter()
-        .position(|h| h == "trade_id" || h == "agg_trade_id")
-        .ok_or_else(|| OutputError::CsvError("trade_id header not found".to_string()))?;
-    for rec in rdr.records() {
-        let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
-        if let Some(id) = parse_i64(rec.get(id_index)) {
-            out.put(id, ());
-        }
-    }
-    Ok(())
-}
-
-/// Load existing funding keys (timestamp) from CSV into LruCache (P0-2: bounded memory)
-/// Supports both "timestamp" (NautilusTrader) and legacy "funding_time" column names
-fn load_existing_funding_keys_lru(path: &Path, out: &mut LruCache<i64, ()>) -> OutputResult<()> {
-    if !path.exists() {
-        return Ok(());
-    }
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(true)
-        .from_path(path)
-        .map_err(|e| OutputError::IoError(format!("Failed to open funding CSV: {e}")))?;
-    let headers = rdr
-        .headers()
-        .map_err(|e| OutputError::CsvError(format!("Failed headers: {e}")))?
-        .clone();
-    let ts_index = headers
-        .iter()
-        .position(|h| h == "timestamp" || h == "funding_time")
-        .ok_or_else(|| OutputError::CsvError("timestamp header not found".to_string()))?;
-    for rec in rdr.records() {
-        let rec = rec.map_err(|e| OutputError::CsvError(format!("Bad record: {e}")))?;
-        if let Some(ts) = parse_i64(rec.get(ts_index)) {
-            out.put(ts, ());
+        if let Some(val) = parse_i64(rec.get(key_index)) {
+            out.put(val, ());
         }
     }
     Ok(())

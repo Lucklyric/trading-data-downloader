@@ -136,7 +136,7 @@ impl SourcesCommand {
 
         if !failures.is_empty() {
             for (id, err) in &failures {
-                eprintln!("Warning: failed to fetch symbols for {}: {}", id, err);
+                eprintln!("Warning: failed to fetch symbols for {id}: {err}");
             }
         }
 

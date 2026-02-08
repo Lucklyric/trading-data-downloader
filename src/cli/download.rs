@@ -43,6 +43,40 @@ fn try_parse_datetime_rfc3339(input: &str) -> Option<i64> {
     None
 }
 
+/// Parse a start time from YYYY-MM-DD or RFC3339 datetime format.
+///
+/// For date-only format, uses start-of-day (00:00:00 UTC).
+/// For RFC3339 format, uses the exact time specified.
+fn parse_start_time_flexible(input: &str) -> Result<i64, CliError> {
+    if let Some(ts) = try_parse_datetime_rfc3339(input) {
+        return Ok(ts);
+    }
+
+    let date = NaiveDate::parse_from_str(input, "%Y-%m-%d")
+        .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {e}")))?;
+    let datetime = date
+        .and_hms_opt(0, 0, 0)
+        .ok_or_else(|| CliError::InvalidArgument("Invalid start time".to_string()))?;
+    Ok(datetime.and_utc().timestamp_millis())
+}
+
+/// Parse an end time from YYYY-MM-DD or RFC3339 datetime format.
+///
+/// For date-only format, uses end-of-day (23:59:59.999 UTC) so the specified date
+/// is fully included. For RFC3339 format, uses the exact time specified.
+fn parse_end_time_flexible(input: &str) -> Result<i64, CliError> {
+    if let Some(ts) = try_parse_datetime_rfc3339(input) {
+        return Ok(ts);
+    }
+
+    let date = NaiveDate::parse_from_str(input, "%Y-%m-%d")
+        .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
+    let datetime = date
+        .and_hms_milli_opt(23, 59, 59, 999)
+        .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
+    Ok(datetime.and_utc().timestamp_millis())
+}
+
 /// Parse and validate concurrency value (L3)
 fn parse_concurrency(s: &str) -> Result<usize, String> {
     let value: usize = s
@@ -182,7 +216,7 @@ impl JobConfig {
     /// actual directory reset happens once in the caller's `execute()` method
     /// before any concurrent jobs are spawned.
     fn create_executor(&self, shutdown: SharedShutdown) -> DownloadExecutor {
-        let executor = match self.resume {
+        match self.resume {
             ResumeMode::Off => DownloadExecutor::new(),
             ResumeMode::On | ResumeMode::Verify | ResumeMode::Reset => {
                 let resume_dir = self
@@ -191,11 +225,10 @@ impl JobConfig {
                     .unwrap_or_else(|| PathBuf::from(".resume"));
                 DownloadExecutor::new_with_resume(resume_dir)
             }
-        };
-        executor
-            .with_max_retries(self.max_retries)
-            .with_force(self.force)
-            .with_shutdown(shutdown)
+        }
+        .with_max_retries(self.max_retries)
+        .with_force(self.force)
+        .with_shutdown(shutdown)
     }
 }
 
@@ -378,30 +411,12 @@ struct DownloadResult {
     error: Option<String>,
 }
 impl BarsArgs {
-    /// Parse start time from YYYY-MM-DD format
     fn parse_start_time(&self) -> Result<i64, CliError> {
-        let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {e}")))?;
-
-        let datetime = date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| CliError::InvalidArgument("Invalid start time".to_string()))?;
-
-        Ok(datetime.and_utc().timestamp_millis())
+        parse_start_time_flexible(&self.start_time)
     }
 
-    /// Parse end time from YYYY-MM-DD format
-    /// Uses end-of-day (23:59:59.999) so --end-time includes the entire specified day
     fn parse_end_time(&self) -> Result<i64, CliError> {
-        let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
-
-        // Use end-of-day so the specified date is fully included
-        let datetime = date
-            .and_hms_milli_opt(23, 59, 59, 999)
-            .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
-
-        Ok(datetime.and_utc().timestamp_millis())
+        parse_end_time_flexible(&self.end_time)
     }
 
     /// Execute bars download (T086-T087)
@@ -514,6 +529,7 @@ impl BarsArgs {
 /// Execute a bars download job with given parameters (F040 helper)
 ///
 /// This standalone function allows concurrent execution of multiple bar download jobs.
+#[allow(clippy::too_many_arguments)]
 async fn execute_bars_job(
     identifier: &str,
     symbol: &str,
@@ -613,41 +629,12 @@ async fn execute_aggtrades_job(
 }
 
 impl AggTradesArgs {
-    /// Parse start time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
     fn parse_start_time(&self) -> Result<i64, CliError> {
-        // Try parsing as full datetime with timezone (M6)
-        if let Some(ts) = try_parse_datetime_rfc3339(&self.start_time) {
-            return Ok(ts);
-        }
-
-        // Fall back to date-only format
-        let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {e}")))?;
-
-        let datetime = date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| CliError::InvalidArgument("Invalid start time".to_string()))?;
-
-        Ok(datetime.and_utc().timestamp_millis())
+        parse_start_time_flexible(&self.start_time)
     }
 
-    /// Parse end time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
-    /// For date-only format, uses end-of-day (23:59:59.999) so --end-time includes the entire day
     fn parse_end_time(&self) -> Result<i64, CliError> {
-        // Try parsing as full datetime with timezone (M6)
-        if let Some(ts) = try_parse_datetime_rfc3339(&self.end_time) {
-            return Ok(ts);
-        }
-
-        // Fall back to date-only format - use end-of-day so the specified date is fully included
-        let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
-
-        let datetime = date
-            .and_hms_milli_opt(23, 59, 59, 999)
-            .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
-
-        Ok(datetime.and_utc().timestamp_millis())
+        parse_end_time_flexible(&self.end_time)
     }
 
     /// Execute aggTrades download (T129)
@@ -914,41 +901,12 @@ fn output_aggtrades_human_result(
 }
 
 impl FundingArgs {
-    /// Parse start time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
     fn parse_start_time(&self) -> Result<i64, CliError> {
-        // Try parsing as full datetime with timezone (M6)
-        if let Some(ts) = try_parse_datetime_rfc3339(&self.start_time) {
-            return Ok(ts);
-        }
-
-        // Fall back to date-only format
-        let date = NaiveDate::parse_from_str(&self.start_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid start time: {e}")))?;
-
-        let datetime = date
-            .and_hms_opt(0, 0, 0)
-            .ok_or_else(|| CliError::InvalidArgument("Invalid start time".to_string()))?;
-
-        Ok(datetime.and_utc().timestamp_millis())
+        parse_start_time_flexible(&self.start_time)
     }
 
-    /// Parse end time from YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS format
-    /// For date-only format, uses end-of-day (23:59:59.999) so --end-time includes the entire day
     fn parse_end_time(&self) -> Result<i64, CliError> {
-        // Try parsing as full datetime with timezone (M6)
-        if let Some(ts) = try_parse_datetime_rfc3339(&self.end_time) {
-            return Ok(ts);
-        }
-
-        // Fall back to date-only format - use end-of-day so the specified date is fully included
-        let date = NaiveDate::parse_from_str(&self.end_time, "%Y-%m-%d")
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid end time: {e}")))?;
-
-        let datetime = date
-            .and_hms_milli_opt(23, 59, 59, 999)
-            .ok_or_else(|| CliError::InvalidArgument("Invalid end time".to_string()))?;
-
-        Ok(datetime.and_utc().timestamp_millis())
+        parse_end_time_flexible(&self.end_time)
     }
 
     /// Execute funding rates download (T151)

@@ -15,28 +15,22 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use trading_data_downloader::{ExchangeIdentifier, downloader::DownloadJob, Interval};
-//! use chrono::Utc;
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! // Parse exchange identifier
-//! let id = ExchangeIdentifier::parse("BINANCE:BTC/USDT:USDT")?;
+//! use trading_data_downloader::downloader::DownloadJob;
+//! use trading_data_downloader::Interval;
 //!
 //! // Create a download job for 1-hour bars
-//! let job = DownloadJob::bars(
-//!     id,
+//! let job = DownloadJob::new_bars(
+//!     "BINANCE:BTC/USDT:USDT".to_string(),
 //!     "BTCUSDT".to_string(),
 //!     Interval::OneHour,
 //!     1640995200000, // 2022-01-01 00:00:00 UTC
 //!     1672531200000, // 2023-01-01 00:00:00 UTC
-//!     "./output.csv".into()
+//!     "./output.csv".into(),
 //! );
 //!
 //! // Execute download
 //! let executor = trading_data_downloader::downloader::DownloadExecutor::new();
-//! executor.execute(job).await?;
-//! # Ok(())
-//! # }
+//! // executor.execute_bars_job(job).await?;
 //! ```
 //!
 //! ## Architecture

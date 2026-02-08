@@ -82,8 +82,7 @@ impl RateLimiter {
         let max = self.max_permits();
         if weight > max {
             return Err(RateLimitError::InvalidWeight(format!(
-                "weight {} exceeds maximum permits {}",
-                weight, max
+                "weight {weight} exceeds maximum permits {max}"
             )));
         }
 
