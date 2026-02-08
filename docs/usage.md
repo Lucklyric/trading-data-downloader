@@ -49,7 +49,7 @@ Commands:
 --output-format <FORMAT>     Output format: json or human (default: human)
 --resume <MODE>              Resume mode: on, off, reset, verify (default: off)
 --resume-dir <DIR>           Custom resume state directory
---concurrency <N>            Number of concurrent downloads (default: 1)
+--concurrency <N>            Number of concurrent downloads (default: 4)
 --max-retries <N>            Maximum retry attempts (default: 5)
 --force                      Force re-download existing data
 ```
@@ -443,25 +443,27 @@ All data is saved as CSV files in the hierarchical directory structure `data/{ve
 - **Location:** `data/binance_futures_usdt/BTCUSDT/BTCUSDT-bars-1m-2024-01.csv`
 - **Format:**
 ```csv
-timestamp,open,high,low,close,volume,trades
-1704067200000,42150.50,42200.00,42100.00,42180.30,150.250,1250
+timestamp,open,high,low,close,volume,close_time,quote_volume,trades,taker_buy_base_volume,taker_buy_quote_volume
+1704067200000,42150.50,42200.00,42100.00,42180.30,150.250,1704067259999,6328500.125,1250,80.100,3376215.000
 ```
 
 **Aggregate Trades:**
 - **Location:** `data/binance_futures_usdt/BTCUSDT/BTCUSDT-aggtrades-2024-01.csv`
 - **Format:**
 ```csv
-agg_trade_id,price,quantity,first_trade_id,last_trade_id,timestamp,is_buyer_maker
-12345678,42150.50,0.500,98765,98770,1704067200000,false
+timestamp,trade_id,price,quantity,first_trade_id,last_trade_id,buyer_maker
+1704067200000,12345678,42150.50,0.500,98765,98770,false
 ```
 
 **Funding Rates:**
 - **Location:** `data/binance_futures_usdt/BTCUSDT/BTCUSDT-funding-2024-01.csv`
 - **Format:**
 ```csv
-timestamp,funding_rate,mark_price
-1704067200000,0.0001,42150.50
+timestamp,symbol,rate
+1704067200000,BTCUSDT,0.0001
 ```
+
+> **NautilusTrader Compatible:** CSV column names are aligned with [NautilusTrader](https://nautilustrader.io/) conventions. See the [NautilusTrader Data Compatibility Guide](../../specs/nautilustrader-data-compatibility.md) for loading examples and integration details.
 
 ## Security & Path Safety
 
@@ -533,12 +535,12 @@ trading-data-downloader download bars \
 
 ### Schema Version Mismatch
 
-If you see an error like:
-```
-incompatible resume state: expected schema 1.0.0, found 0.9.0. Delete the state file at ./data/.resume/btcusdt.json to start fresh.
-```
+The tool uses schema version **1.1.0** for resume state files. Resume states from version 1.0.0 are **automatically migrated** to 1.1.0 on load.
 
-This means the resume state file was created by an older version of the tool with an incompatible format.
+If you see an error about incompatible schema versions from older state files:
+```
+incompatible resume state: unsupported schema version 0.9.0
+```
 
 **Solution:** Delete the state file mentioned in the error message and restart the download:
 ```bash

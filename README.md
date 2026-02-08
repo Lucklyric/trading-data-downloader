@@ -10,6 +10,7 @@ A high-performance CLI tool for downloading historical trading data from cryptoc
 - **Reliable Downloads**: Automatic retry with exponential backoff and clear error messages
 - **Resume Support**: Interrupted downloads resume from where they left off
 - **Progress Tracking**: Real-time progress updates for long-running downloads
+- **NautilusTrader Compatible**: CSV output columns aligned with [NautilusTrader](https://nautilustrader.io/) conventions for direct loading
 - **Production Ready**: Comprehensive error handling, rate limiting, and data validation
 
 ## Supported Exchanges
@@ -82,7 +83,7 @@ data/
 - `--resume on` - Enable automatic resume for interrupted downloads
 - `--max-retries N` - Set maximum retry attempts (default: 5)
 - `--force` - Re-download even if data already exists
-- `--concurrency N` - Download multiple symbols concurrently
+- `--concurrency N` - Download multiple symbols concurrently (default: 4)
 
 ## Security Considerations
 
@@ -107,6 +108,7 @@ data/
 ## Documentation
 
 - [Usage Guide](docs/usage.md) - Detailed command examples and common workflows
+- [NautilusTrader Data Compatibility](../specs/nautilustrader-data-compatibility.md) - Loading data into NautilusTrader for backtesting
 
 ## Requirements
 
