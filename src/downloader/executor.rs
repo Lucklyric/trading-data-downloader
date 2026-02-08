@@ -584,25 +584,8 @@ impl DownloadExecutor {
             job.progress.current_position = Some(start_time);
         }
 
-        // P0-3: If output exists and not forcing, skip/adjust to avoid redundant downloads
-        if !self.force && job.output_path.exists() {
-            if let Ok(Some((_min_ts, max_ts))) = read_time_range(&job.output_path) {
-                let adjusted = max_ts + 1;
-                if adjusted >= job.end_time {
-                    info!("Output already fully covers requested bars range; skipping download");
-                    job.status = JobStatus::Completed;
-                    job.progress.current_position = Some(max_ts);
-                    return Ok(job.progress.clone());
-                }
-                if adjusted > start_time {
-                    info!(
-                        start_time = adjusted,
-                        "Adjusting bars start_time to existing coverage end + 1"
-                    );
-                    start_time = adjusted;
-                    job.progress.current_position = Some(start_time);
-                }
-            }
+        if let Some(progress) = self.check_existing_output(&mut job, &mut start_time, true) {
+            return Ok(progress);
         }
 
         // Calculate expected total bars
@@ -694,25 +677,8 @@ impl DownloadExecutor {
             job.progress.current_position = resume_timestamp.or(Some(job.start_time));
         }
 
-        // P0-3: If output exists and not forcing, skip/adjust to avoid redundant downloads
-        if !self.force && job.output_path.exists() {
-            if let Ok(Some((_min_ts, max_ts))) = read_time_range(&job.output_path) {
-                let adjusted = max_ts + 1;
-                if adjusted >= job.end_time {
-                    info!("Output fully covers requested aggTrades; skipping");
-                    job.status = JobStatus::Completed;
-                    job.progress.current_position = Some(max_ts);
-                    return Ok(job.progress.clone());
-                }
-                if adjusted > start_time && from_id.is_none() {
-                    info!(
-                        start_time = adjusted,
-                        "Adjusting aggTrades start_time to coverage end + 1"
-                    );
-                    start_time = adjusted;
-                    job.progress.current_position = Some(start_time);
-                }
-            }
+        if let Some(progress) = self.check_existing_output(&mut job, &mut start_time, from_id.is_none()) {
+            return Ok(progress);
         }
 
         debug!("Fetching aggTrades for time range");
@@ -792,25 +758,8 @@ impl DownloadExecutor {
             job.progress.current_position = Some(start_time);
         }
 
-        // P0-3: If output exists and not forcing, skip/adjust to avoid redundant downloads
-        if !self.force && job.output_path.exists() {
-            if let Ok(Some((_min_ts, max_ts))) = read_time_range(&job.output_path) {
-                let adjusted = max_ts + 1;
-                if adjusted >= job.end_time {
-                    info!("Output fully covers requested funding; skipping");
-                    job.status = JobStatus::Completed;
-                    job.progress.current_position = Some(max_ts);
-                    return Ok(job.progress.clone());
-                }
-                if adjusted > start_time {
-                    info!(
-                        start_time = adjusted,
-                        "Adjusting funding start_time to coverage end + 1"
-                    );
-                    start_time = adjusted;
-                    job.progress.current_position = Some(start_time);
-                }
-            }
+        if let Some(progress) = self.check_existing_output(&mut job, &mut start_time, true) {
+            return Ok(progress);
         }
 
         debug!("Fetching funding rates for time range");
@@ -862,6 +811,86 @@ impl DownloadExecutor {
         result
     }
 
+    /// Handle retry failure: mark job failed and return error
+    fn handle_retry_failure(
+        &self,
+        job: &mut DownloadJob,
+        last_error: Option<FetcherError>,
+    ) -> DownloadError {
+        job.status = JobStatus::Failed;
+        let error_msg = last_error
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "Unknown error".to_string());
+        job.progress.error = Some(error_msg.clone());
+        DownloadError::NetworkError(format!(
+            "Max retries ({}) exceeded: {}",
+            self.max_retries, error_msg
+        ))
+    }
+
+    /// Get next stream item with shutdown awareness (P2-1)
+    async fn next_stream_item<T>(
+        &self,
+        stream: &mut std::pin::Pin<Box<dyn futures_util::Stream<Item = T> + Send>>,
+    ) -> Option<T> {
+        if let Some(shutdown) = &self.shutdown {
+            tokio::select! {
+                item = stream.next() => item,
+                _ = shutdown.wait_for_shutdown() => None,
+            }
+        } else {
+            stream.next().await
+        }
+    }
+
+    /// Check if output already covers the requested range (P0-3)
+    ///
+    /// Returns `Some(progress)` if fully covered (skip download), or adjusts `start_time` if partially covered.
+    fn check_existing_output(
+        &self,
+        job: &mut DownloadJob,
+        start_time: &mut i64,
+        extra_condition: bool,
+    ) -> Option<JobProgress> {
+        if self.force || !job.output_path.exists() {
+            return None;
+        }
+        if let Ok(Some((_min_ts, max_ts))) = read_time_range(&job.output_path) {
+            let adjusted = max_ts + 1;
+            if adjusted >= job.end_time {
+                info!("Output already fully covers requested range; skipping download");
+                job.status = JobStatus::Completed;
+                job.progress.current_position = Some(max_ts);
+                return Some(job.progress.clone());
+            }
+            if adjusted > *start_time && extra_condition {
+                info!(
+                    start_time = adjusted,
+                    "Adjusting start_time to existing coverage end + 1"
+                );
+                *start_time = adjusted;
+                job.progress.current_position = Some(*start_time);
+            }
+        }
+        None
+    }
+
+    /// Emit progress update if threshold met
+    fn maybe_emit_progress(
+        &self,
+        job: &DownloadJob,
+        progress_state: &mut ProgressState,
+    ) {
+        if progress_state.should_emit_update() {
+            info!(
+                symbol = %job.symbol,
+                "{}",
+                progress_state.format_progress()
+            );
+            progress_state.mark_emitted();
+        }
+    }
+
     /// Download bars with retry logic - type-safe version for bars
     ///
     /// # Sequential Stream Processing (T050/F030)
@@ -889,7 +918,6 @@ impl DownloadExecutor {
         let mut last_error: Option<FetcherError>;
 
         loop {
-            // Reset last_error at start of each attempt so successful retries complete properly
             last_error = None;
 
             if self.shutdown_requested() {
@@ -900,27 +928,24 @@ impl DownloadExecutor {
                 .await
             {
                 Ok(mut stream) => {
-                    // Process stream with shutdown awareness (P2-1)
                     loop {
-                        let next_item = if let Some(shutdown) = &self.shutdown {
-                            tokio::select! {
-                                item = stream.next() => item,
-                                _ = shutdown.wait_for_shutdown() => {
-                                    return self.abort_due_to_shutdown(job, None).await;
-                                }
-                            }
-                        } else {
-                            stream.next().await
-                        };
+                        if self.shutdown_requested() {
+                            return self.abort_due_to_shutdown(job, None).await;
+                        }
+                        let next_item = self.next_stream_item(&mut stream).await;
 
                         let result = match next_item {
                             Some(r) => r,
-                            None => break,
+                            None => {
+                                if self.shutdown_requested() {
+                                    return self.abort_due_to_shutdown(job, None).await;
+                                }
+                                break;
+                            }
                         };
 
                         match result {
                             Ok(bar) => {
-                                // Write bar using safe enum dispatch
                                 let was_written = writer.write_bar(&bar)?;
                                 job.progress.downloaded_bars += 1;
                                 if was_written {
@@ -932,21 +957,12 @@ impl DownloadExecutor {
 
                                 progress_state.update(1, Some(timestamp));
 
-                                // Update visual progress bar if provided
                                 if let Some(pb) = progress_bar {
                                     pb.inc(1);
                                 }
 
-                                if progress_state.should_emit_update() {
-                                    info!(
-                                        symbol = %job.symbol,
-                                        "{}",
-                                        progress_state.format_progress()
-                                    );
-                                    progress_state.mark_emitted();
-                                }
+                                self.maybe_emit_progress(job, progress_state);
 
-                                // Save checkpoint at intervals
                                 if job.progress.downloaded_bars % CHECKPOINT_INTERVAL_BARS == 0 {
                                     debug!(
                                         bars_downloaded = job.progress.downloaded_bars,
@@ -970,7 +986,6 @@ impl DownloadExecutor {
                         }
                     }
 
-                    // If we got here without error, download is complete
                     if last_error.is_none() {
                         job.status = JobStatus::Completed;
                         break;
@@ -982,24 +997,14 @@ impl DownloadExecutor {
                 }
             }
 
-            // Retry logic
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
                 if self.shutdown_requested() {
                     return self.abort_due_to_shutdown(job, None).await;
                 }
-                job.status = JobStatus::Failed;
-                let error_msg = last_error
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                job.progress.error = Some(error_msg.clone());
-                return Err(DownloadError::NetworkError(format!(
-                    "Max retries ({}) exceeded: {}",
-                    self.max_retries, error_msg
-                )));
+                return Err(self.handle_retry_failure(job, last_error));
             }
 
-            // Continue from last known position
             if let Some(pos) = job.progress.current_position {
                 *start_time = pos + 1;
             }
@@ -1023,11 +1028,9 @@ impl DownloadExecutor {
     ) -> Result<JobProgress, DownloadError> {
         let mut retry_count = 0;
         let mut last_error: Option<FetcherError>;
-        // Track last processed trade ID for cursor-based shutdown checkpoints
         let mut last_aggtrade_id: Option<i64> = None;
 
         loop {
-            // Reset last_error at start of each attempt so successful retries complete properly
             last_error = None;
 
             if self.shutdown_requested() {
@@ -1038,27 +1041,24 @@ impl DownloadExecutor {
                 .await
             {
                 Ok(mut stream) => {
-                    // Process stream with shutdown awareness (P2-1)
                     loop {
-                        let next_item = if let Some(shutdown) = &self.shutdown {
-                            tokio::select! {
-                                item = stream.next() => item,
-                                _ = shutdown.wait_for_shutdown() => {
-                                    return self.abort_due_to_shutdown(job, last_aggtrade_id).await;
-                                }
-                            }
-                        } else {
-                            stream.next().await
-                        };
+                        if self.shutdown_requested() {
+                            return self.abort_due_to_shutdown(job, last_aggtrade_id).await;
+                        }
+                        let next_item = self.next_stream_item(&mut stream).await;
 
                         let result = match next_item {
                             Some(r) => r,
-                            None => break,
+                            None => {
+                                if self.shutdown_requested() {
+                                    return self.abort_due_to_shutdown(job, last_aggtrade_id).await;
+                                }
+                                break;
+                            }
                         };
 
                         match result {
                             Ok(trade) => {
-                                // Write trade using safe enum dispatch
                                 writer.write_aggtrade(&trade)?;
                                 job.progress.downloaded_bars += 1;
                                 job.progress.written_bars = writer.items_written();
@@ -1068,16 +1068,8 @@ impl DownloadExecutor {
                                 last_aggtrade_id = Some(trade.agg_trade_id);
 
                                 progress_state.update(1, Some(timestamp));
-                                if progress_state.should_emit_update() {
-                                    info!(
-                                        symbol = %job.symbol,
-                                        "{}",
-                                        progress_state.format_progress()
-                                    );
-                                    progress_state.mark_emitted();
-                                }
+                                self.maybe_emit_progress(job, progress_state);
 
-                                // Save cursor-based checkpoint at intervals using agg_trade_id
                                 if job.progress.downloaded_bars % CHECKPOINT_INTERVAL_TRADES == 0 {
                                     let checkpoint = Checkpoint::cursor(
                                         format!("aggtrade_id:{}", trade.agg_trade_id),
@@ -1095,7 +1087,6 @@ impl DownloadExecutor {
                         }
                     }
 
-                    // If we got here without error, download is complete
                     if last_error.is_none() {
                         job.status = JobStatus::Completed;
                         break;
@@ -1107,24 +1098,14 @@ impl DownloadExecutor {
                 }
             }
 
-            // Retry logic
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
                 if self.shutdown_requested() {
                     return self.abort_due_to_shutdown(job, last_aggtrade_id).await;
                 }
-                job.status = JobStatus::Failed;
-                let error_msg = last_error
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                job.progress.error = Some(error_msg.clone());
-                return Err(DownloadError::NetworkError(format!(
-                    "Max retries ({}) exceeded: {}",
-                    self.max_retries, error_msg
-                )));
+                return Err(self.handle_retry_failure(job, last_error));
             }
 
-            // Continue from last known trade ID if available, else fall back to timestamp
             if let Some(trade_id) = last_aggtrade_id {
                 *from_id = Some(trade_id + 1);
             } else if let Some(pos) = job.progress.current_position {
@@ -1149,7 +1130,6 @@ impl DownloadExecutor {
         let mut last_error: Option<FetcherError>;
 
         loop {
-            // Reset last_error at start of each attempt so successful retries complete properly
             last_error = None;
 
             if self.shutdown_requested() {
@@ -1160,27 +1140,24 @@ impl DownloadExecutor {
                 .await
             {
                 Ok(mut stream) => {
-                    // Process stream with shutdown awareness (P2-1)
                     loop {
-                        let next_item = if let Some(shutdown) = &self.shutdown {
-                            tokio::select! {
-                                item = stream.next() => item,
-                                _ = shutdown.wait_for_shutdown() => {
-                                    return self.abort_due_to_shutdown(job, None).await;
-                                }
-                            }
-                        } else {
-                            stream.next().await
-                        };
+                        if self.shutdown_requested() {
+                            return self.abort_due_to_shutdown(job, None).await;
+                        }
+                        let next_item = self.next_stream_item(&mut stream).await;
 
                         let result = match next_item {
                             Some(r) => r,
-                            None => break,
+                            None => {
+                                if self.shutdown_requested() {
+                                    return self.abort_due_to_shutdown(job, None).await;
+                                }
+                                break;
+                            }
                         };
 
                         match result {
                             Ok(rate) => {
-                                // Write funding rate using safe enum dispatch
                                 writer.write_funding(&rate)?;
                                 job.progress.downloaded_bars += 1;
                                 job.progress.written_bars = writer.items_written();
@@ -1189,16 +1166,8 @@ impl DownloadExecutor {
                                 job.progress.current_position = Some(timestamp);
 
                                 progress_state.update(1, Some(timestamp));
-                                if progress_state.should_emit_update() {
-                                    info!(
-                                        symbol = %job.symbol,
-                                        "{}",
-                                        progress_state.format_progress()
-                                    );
-                                    progress_state.mark_emitted();
-                                }
+                                self.maybe_emit_progress(job, progress_state);
 
-                                // Save checkpoint at intervals
                                 if job.progress.downloaded_bars % CHECKPOINT_INTERVAL_FUNDING == 0 {
                                     let checkpoint = Checkpoint::time_window(
                                         job.start_time,
@@ -1217,7 +1186,6 @@ impl DownloadExecutor {
                         }
                     }
 
-                    // If we got here without error, download is complete
                     if last_error.is_none() {
                         job.status = JobStatus::Completed;
                         break;
@@ -1229,24 +1197,14 @@ impl DownloadExecutor {
                 }
             }
 
-            // Retry logic
             retry_count += 1;
             if !self.retry_with_backoff(retry_count, job).await {
                 if self.shutdown_requested() {
                     return self.abort_due_to_shutdown(job, None).await;
                 }
-                job.status = JobStatus::Failed;
-                let error_msg = last_error
-                    .map(|e| e.to_string())
-                    .unwrap_or_else(|| "Unknown error".to_string());
-                job.progress.error = Some(error_msg.clone());
-                return Err(DownloadError::NetworkError(format!(
-                    "Max retries ({}) exceeded: {}",
-                    self.max_retries, error_msg
-                )));
+                return Err(self.handle_retry_failure(job, last_error));
             }
 
-            // Continue from last known position
             if let Some(pos) = job.progress.current_position {
                 *start_time = pos + 1;
             }

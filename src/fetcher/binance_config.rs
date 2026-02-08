@@ -71,6 +71,10 @@ pub struct BinanceMarketConfig {
 
     /// Rate limit weight for exchangeInfo endpoint (F037)
     pub exchange_info_weight: u32,
+
+    /// JSON field name for symbol trading status in exchangeInfo response
+    /// USDT uses "status", COIN uses "contractStatus"
+    pub status_field_name: &'static str,
 }
 
 /// T226: USDT-margined futures configuration (FAPI)
@@ -96,6 +100,7 @@ pub const USDT_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
     aggtrades_weight: 20,
     funding_weight: 1,
     exchange_info_weight: 10,
+    status_field_name: "status",
 };
 
 /// T227: COIN-margined futures configuration (DAPI)
@@ -121,6 +126,7 @@ pub const COIN_FUTURES_CONFIG: BinanceMarketConfig = BinanceMarketConfig {
     aggtrades_weight: 20,
     funding_weight: 1,
     exchange_info_weight: 10,
+    status_field_name: "contractStatus",
 };
 
 impl BinanceMarketConfig {

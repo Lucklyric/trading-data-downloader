@@ -1,13 +1,12 @@
 //! Download command implementation (T082-T087)
 
-use crate::downloader::{DownloadExecutor, DownloadJob, JobProgress};
+use crate::downloader::{DownloadExecutor, DownloadJob, JobProgress, JobType};
 use crate::shutdown::SharedShutdown;
 use crate::Interval;
 use chrono::{DateTime, NaiveDate};
 use clap::{Parser, Subcommand};
 use futures::stream::{self, StreamExt};
 use indicatif::{ProgressBar, ProgressStyle};
-use serde::Serialize;
 use std::path::PathBuf;
 use std::str::FromStr;
 use tracing::{error, info};
@@ -26,16 +25,12 @@ const MAX_CONCURRENCY: usize = 32;
 ///
 /// Returns timestamp in milliseconds, or None if parsing fails.
 fn try_parse_datetime_rfc3339(input: &str) -> Option<i64> {
-    // Trim whitespace to handle user input with leading/trailing spaces
     let input = input.trim();
 
-    // First try parsing as-is (may have timezone)
     if let Ok(dt) = DateTime::parse_from_rfc3339(input) {
         return Some(dt.timestamp_millis());
     }
 
-    // If that fails, try appending 'Z' for inputs without timezone
-    // This handles "2024-01-01T00:00:00" format
     if let Ok(dt) = DateTime::parse_from_rfc3339(&format!("{input}Z")) {
         return Some(dt.timestamp_millis());
     }
@@ -146,7 +141,6 @@ fn handle_resume_verify(resume_dir: &PathBuf) -> Result<(), CliError> {
         return Ok(());
     }
 
-    // Check for any .json files in resume directory and validate them
     let entries = std::fs::read_dir(resume_dir).map_err(|e| {
         CliError::InvalidArgument(format!(
             "Failed to read resume directory {resume_dir:?}: {e}"
@@ -186,10 +180,6 @@ fn handle_resume_verify(resume_dir: &PathBuf) -> Result<(), CliError> {
 }
 
 /// Configuration needed for concurrent job execution (F040)
-///
-/// This struct holds a copy of the cloneable CLI fields needed by the
-/// helper functions for concurrent job execution. This avoids requiring
-/// Clone on the entire Cli struct (which contains Commands enum).
 #[derive(Clone)]
 struct JobConfig {
     resume: ResumeMode,
@@ -210,11 +200,6 @@ impl JobConfig {
         }
     }
 
-    /// Create a configured executor from this job config.
-    ///
-    /// Resume mode Reset is handled identically to On here because the
-    /// actual directory reset happens once in the caller's `execute()` method
-    /// before any concurrent jobs are spawned.
     fn create_executor(&self, shutdown: SharedShutdown) -> DownloadExecutor {
         match self.resume {
             ResumeMode::Off => DownloadExecutor::new(),
@@ -394,355 +379,397 @@ impl FromStr for OutputFormat {
     }
 }
 
-/// Download result for JSON output
-#[derive(Debug, Serialize)]
-struct DownloadResult {
-    success: bool,
-    identifier: String,
-    symbol: String,
-    interval: String,
-    start_time: i64,
-    end_time: i64,
-    output_path: String,
-    bars_downloaded: u64,
-    bars_written: u64,
-    api_requests: u64,
-    retries: u64,
-    error: Option<String>,
+// ─── Unified data type descriptor ────────────────────────────────────────────
+
+/// Describes a data type for unified output formatting
+struct DataTypeDescriptor {
+    /// Display name for completion message (e.g., "Download", "AggTrades download")
+    display_name: &'static str,
+    /// Label for downloaded count (e.g., "Bars", "Trades", "Rates")
+    count_label: &'static str,
+    /// Data type name for JSON output (e.g., "bars", "aggtrades", "funding")
+    data_type_name: &'static str,
+    /// Prefix for JSON count fields (e.g., "bars", "trades", "rates")
+    json_count_prefix: &'static str,
 }
-impl BarsArgs {
-    fn parse_start_time(&self) -> Result<i64, CliError> {
-        parse_start_time_flexible(&self.start_time)
+
+const BARS_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
+    display_name: "Download",
+    count_label: "Bars",
+    data_type_name: "bars",
+    json_count_prefix: "bars",
+};
+
+const AGGTRADES_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
+    display_name: "AggTrades download",
+    count_label: "Trades",
+    data_type_name: "aggtrades",
+    json_count_prefix: "trades",
+};
+
+const FUNDING_DESCRIPTOR: DataTypeDescriptor = DataTypeDescriptor {
+    display_name: "Funding rates download",
+    count_label: "Rates",
+    data_type_name: "funding",
+    json_count_prefix: "rates",
+};
+
+// ─── Unified output functions ────────────────────────────────────────────────
+
+/// Output result as JSON (unified for all data types)
+fn output_json(
+    desc: &DataTypeDescriptor,
+    job: &DownloadJob,
+    result: &Result<JobProgress, crate::downloader::DownloadError>,
+) {
+    let (success, downloaded, written, api_requests, retries, err) = match result {
+        Ok(progress) => (
+            true,
+            progress.downloaded_bars,
+            progress.written_bars,
+            progress.api_requests,
+            progress.retries,
+            None,
+        ),
+        Err(e) => (false, 0, 0, 0, 0, Some(e.to_string())),
+    };
+
+    // Build JSON matching original per-type format:
+    // - Bars: has "interval", no "data_type"
+    // - AggTrades/Funding: has "data_type", no "interval"
+    let mut output = serde_json::json!({
+        "success": success,
+        "identifier": job.identifier,
+        "symbol": job.symbol,
+        "start_time": job.start_time,
+        "end_time": job.end_time,
+        "output_path": job.output_path.display().to_string(),
+        format!("{}_downloaded", desc.json_count_prefix): downloaded,
+        format!("{}_written", desc.json_count_prefix): written,
+        "api_requests": api_requests,
+        "retries": retries,
+        "error": err,
+    });
+
+    if let JobType::Bars { interval } = job.job_type {
+        output["interval"] = serde_json::Value::String(interval.to_string());
+    } else {
+        output["data_type"] = serde_json::Value::String(desc.data_type_name.to_string());
     }
 
-    fn parse_end_time(&self) -> Result<i64, CliError> {
-        parse_end_time_flexible(&self.end_time)
-    }
+    println!("{}", serde_json::to_string(&output).unwrap());
+}
 
-    /// Execute bars download (T086-T087)
-    pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
-        let start_time = self.parse_start_time()?;
-        let end_time = self.parse_end_time()?;
-        let interval = Interval::from_str(&self.interval)
-            .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
-
-        // Handle Reset/Verify modes before starting downloads
-        let resume_dir = cli.resume_dir.clone().unwrap_or_else(|| PathBuf::from(".resume"));
-        match cli.resume {
-            ResumeMode::Reset => handle_resume_reset(&resume_dir)?,
-            ResumeMode::Verify => handle_resume_verify(&resume_dir)?,
-            _ => {}
+/// Output result in human-readable format (unified for all data types)
+fn output_human(
+    desc: &DataTypeDescriptor,
+    job: &DownloadJob,
+    result: &Result<JobProgress, crate::downloader::DownloadError>,
+) {
+    match result {
+        Ok(progress) => {
+            println!("\n{} completed successfully!", desc.display_name);
+            if let JobType::Bars { interval } = job.job_type {
+                println!("Symbol: {} {}", job.symbol, interval);
+            } else {
+                println!("Symbol: {}", job.symbol);
+            }
+            println!("Output: {}", job.output_path.display());
+            println!("{} downloaded: {}", desc.count_label, progress.downloaded_bars);
+            println!("{} written: {}", desc.count_label, progress.written_bars);
+            if progress.retries > 0 {
+                println!("Retries: {}", progress.retries);
+            }
         }
-
-        // Always use hierarchical structure - no exceptions
-        use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
-
-        let root = cli
-            .data_dir
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("data"));
-
-        // Ensure base directories exist
-        let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-            .with_data_type(DataType::Bars);
-        builder
-            .ensure_directories()
-            .map_err(|e| CliError::InvalidArgument(format!("Failed to create directories: {e}")))?;
-
-        // Split time range into monthly chunks
-        let month_ranges = split_into_month_ranges(start_time, end_time);
-
-        info!(
-            "Downloading {} months of data: {} {} from {} to {}",
-            month_ranges.len(),
-            self.symbol,
-            self.interval,
-            self.start_time,
-            self.end_time
-        );
-
-        // Pre-build job configs for concurrent execution (F040)
-        let job_configs: Vec<_> = month_ranges
-            .into_iter()
-            .map(|month_range| {
-                let path_builder =
-                    OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-                        .with_data_type(DataType::Bars)
-                        .with_interval(interval)
-                        .with_month(month_range.month);
-
-                let output_path = path_builder.build().map_err(|e| {
-                    CliError::InvalidArgument(format!("Failed to build output path: {e}"))
-                })?;
-                Ok((month_range, output_path))
-            })
-            .collect::<Result<Vec<_>, CliError>>()?;
-
-        // Execute jobs with configurable concurrency (F040)
-        let concurrency = cli.concurrency.max(1);
-        let config = JobConfig::from_cli(cli);
-        info!(
-            "Processing {} months with concurrency {}",
-            job_configs.len(),
-            concurrency
-        );
-
-        let results: Vec<Result<(), CliError>> = stream::iter(job_configs)
-            .map(|(month_range, output_path)| {
-                let identifier = self.identifier.clone();
-                let symbol = self.symbol.clone();
-                let config_clone = config.clone();
-                let shutdown_clone = shutdown.clone();
-
-                async move {
-                    info!(
-                        "Processing month {}: {} to {}",
-                        month_range.month, month_range.start_ms, month_range.end_ms
-                    );
-
-                    execute_bars_job(
-                        &identifier,
-                        &symbol,
-                        &config_clone,
-                        shutdown_clone,
-                        interval,
-                        month_range.start_ms,
-                        month_range.end_ms,
-                        output_path,
-                    )
-                    .await
-                }
-            })
-            .buffer_unordered(concurrency)
-            .collect()
-            .await;
-
-        // Check for errors
-        for result in results {
-            result?;
+        Err(e) => {
+            eprintln!("\n{} failed!", desc.display_name);
+            eprintln!("Error: {e}");
+            error!("Download failed: {}", e);
         }
-
-        Ok(())
     }
 }
 
-/// Execute a bars download job with given parameters (F040 helper)
-///
-/// This standalone function allows concurrent execution of multiple bar download jobs.
-#[allow(clippy::too_many_arguments)]
-async fn execute_bars_job(
-    identifier: &str,
-    symbol: &str,
-    config: &JobConfig,
+// ─── Unified job execution ───────────────────────────────────────────────────
+
+struct DownloadJobParams<'a> {
+    desc: &'a DataTypeDescriptor,
+    identifier: &'a str,
+    symbol: &'a str,
+    config: &'a JobConfig,
     shutdown: SharedShutdown,
-    interval: crate::Interval,
+    interval: Option<Interval>,
     start_time: i64,
     end_time: i64,
     output_path: PathBuf,
-) -> Result<(), CliError> {
-    // Create download job
-    let job = DownloadJob::new(
-        identifier.to_string(),
-        symbol.to_string(),
+}
+
+/// Unified download job execution helper (F040)
+async fn execute_download_job(params: DownloadJobParams<'_>) -> Result<(), CliError> {
+    let DownloadJobParams {
+        desc,
+        identifier,
+        symbol,
+        config,
+        shutdown,
         interval,
         start_time,
         end_time,
-        output_path.clone(),
-    );
+        output_path,
+    } = params;
+    let job = match interval {
+        Some(iv) => DownloadJob::new(
+            identifier.to_string(),
+            symbol.to_string(),
+            iv,
+            start_time,
+            end_time,
+            output_path.clone(),
+        ),
+        None => {
+            if desc.data_type_name == "aggtrades" {
+                DownloadJob::new_aggtrades(
+                    identifier.to_string(),
+                    symbol.to_string(),
+                    start_time,
+                    end_time,
+                    output_path.clone(),
+                )
+            } else {
+                DownloadJob::new_funding(
+                    identifier.to_string(),
+                    symbol.to_string(),
+                    start_time,
+                    end_time,
+                    output_path.clone(),
+                )
+            }
+        }
+    };
 
     let executor = config.create_executor(shutdown);
-
-    // Create progress bar
     let progress = create_progress_bar(&job);
 
-    // Execute download
     info!(
-        "Starting download: {} {} from {} to {}",
-        symbol, interval, start_time, end_time
+        "Starting {} download: {} from {} to {}",
+        desc.data_type_name, symbol, start_time, end_time
     );
 
-    let result = executor
-        .execute_bars_job(job.clone(), Some(progress.clone()))
-        .await;
+    let result = match job.job_type {
+        JobType::Bars { .. } => {
+            executor
+                .execute_bars_job(job.clone(), Some(progress.clone()))
+                .await
+        }
+        JobType::AggTrades => executor.execute_aggtrades_job(job.clone()).await,
+        JobType::FundingRates => executor.execute_funding_job(job.clone()).await,
+    };
 
     progress.finish_and_clear();
 
-    // Format output
     match config.output_format {
-        OutputFormat::Json => {
-            output_json_result(&job, &result);
-        }
-        OutputFormat::Human => {
-            output_human_result(&job, &result);
-        }
+        OutputFormat::Json => output_json(desc, &job, &result),
+        OutputFormat::Human => output_human(desc, &job, &result),
     }
 
     result.map(|_| ()).map_err(CliError::DownloadError)
 }
 
-/// Helper function for concurrent aggTrades job execution (F040)
-async fn execute_aggtrades_job(
-    identifier: &str,
-    symbol: &str,
-    config: &JobConfig,
+// ─── Shared execute logic for Args structs ───────────────────────────────────
+
+struct DownloadParams<'a> {
+    identifier: &'a str,
+    symbol: &'a str,
+    start_time_str: &'a str,
+    end_time_str: &'a str,
+    data_type: crate::output::DataType,
+    interval: Option<Interval>,
+    desc: &'static DataTypeDescriptor,
+    cli: &'a Cli,
     shutdown: SharedShutdown,
-    start_time: i64,
-    end_time: i64,
-    output_path: PathBuf,
-) -> Result<(), CliError> {
-    // Create download job
-    let job = DownloadJob::new_aggtrades(
-        identifier.to_string(),
-        symbol.to_string(),
-        start_time,
-        end_time,
-        output_path.clone(),
-    );
+}
 
-    let executor = config.create_executor(shutdown);
+/// Common download execution: resume handling, directory setup, month splitting, concurrency
+async fn execute_download(params: DownloadParams<'_>) -> Result<(), CliError> {
+    let DownloadParams {
+        identifier,
+        symbol,
+        start_time_str,
+        end_time_str,
+        data_type,
+        interval,
+        desc,
+        cli,
+        shutdown,
+    } = params;
+    let start_time = parse_start_time_flexible(start_time_str)?;
+    let end_time = parse_end_time_flexible(end_time_str)?;
 
-    // Create progress bar
-    let progress = ProgressBar::new_spinner();
-    progress.set_message(format!("Downloading {symbol} aggTrades"));
-
-    // Execute download
-    info!(
-        "Starting aggTrades download: {} from {} to {}",
-        symbol, start_time, end_time
-    );
-
-    let result = executor.execute_aggtrades_job(job.clone()).await;
-
-    progress.finish_and_clear();
-
-    // Format output
-    match config.output_format {
-        OutputFormat::Json => {
-            output_aggtrades_json_result(&job, &result);
-        }
-        OutputFormat::Human => {
-            output_aggtrades_human_result(&job, &result);
-        }
+    // Handle Reset/Verify modes before starting downloads
+    let resume_dir = cli
+        .resume_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(".resume"));
+    match cli.resume {
+        ResumeMode::Reset => handle_resume_reset(&resume_dir)?,
+        ResumeMode::Verify => handle_resume_verify(&resume_dir)?,
+        _ => {}
     }
 
-    result.map(|_| ()).map_err(CliError::DownloadError)
+    use crate::output::{split_into_month_ranges, OutputPathBuilder};
+
+    let root = cli
+        .data_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("data"));
+
+    // Ensure base directories exist
+    let builder = OutputPathBuilder::new(root.clone(), identifier, symbol)
+        .with_data_type(data_type);
+    builder
+        .ensure_directories()
+        .map_err(|e| CliError::InvalidArgument(format!("Failed to create directories: {e}")))?;
+
+    let month_ranges = split_into_month_ranges(start_time, end_time);
+
+    info!(
+        "Downloading {} months of {} data: {} from {} to {}",
+        month_ranges.len(),
+        desc.data_type_name,
+        symbol,
+        start_time_str,
+        end_time_str
+    );
+
+    // Pre-build job configs for concurrent execution (F040)
+    let job_configs: Vec<_> = month_ranges
+        .into_iter()
+        .map(|month_range| {
+            let mut path_builder = OutputPathBuilder::new(root.clone(), identifier, symbol)
+                .with_data_type(data_type)
+                .with_month(month_range.month);
+
+            if let Some(iv) = interval {
+                path_builder = path_builder.with_interval(iv);
+            }
+
+            let output_path = path_builder.build().map_err(|e| {
+                CliError::InvalidArgument(format!("Failed to build output path: {e}"))
+            })?;
+            Ok((month_range, output_path))
+        })
+        .collect::<Result<Vec<_>, CliError>>()?;
+
+    let concurrency = cli.concurrency.max(1);
+    let config = JobConfig::from_cli(cli);
+    info!(
+        "Processing {} months with concurrency {}",
+        job_configs.len(),
+        concurrency
+    );
+
+    let results: Vec<Result<(), CliError>> = stream::iter(job_configs)
+        .map(|(month_range, output_path)| {
+            let identifier = identifier.to_string();
+            let symbol = symbol.to_string();
+            let config_clone = config.clone();
+            let shutdown_clone = shutdown.clone();
+
+            async move {
+                info!(
+                    "Processing month {}: {} to {}",
+                    month_range.month, month_range.start_ms, month_range.end_ms
+                );
+
+                execute_download_job(DownloadJobParams {
+                    desc,
+                    identifier: &identifier,
+                    symbol: &symbol,
+                    config: &config_clone,
+                    shutdown: shutdown_clone,
+                    interval,
+                    start_time: month_range.start_ms,
+                    end_time: month_range.end_ms,
+                    output_path,
+                })
+                .await
+            }
+        })
+        .buffer_unordered(concurrency)
+        .collect()
+        .await;
+
+    for result in results {
+        result?;
+    }
+
+    Ok(())
+}
+
+// ─── Args execute implementations ────────────────────────────────────────────
+
+impl BarsArgs {
+    /// Execute bars download (T086-T087)
+    pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
+        let interval = Interval::from_str(&self.interval)
+            .map_err(|e| CliError::InvalidArgument(format!("Invalid interval: {e}")))?;
+
+        execute_download(DownloadParams {
+            identifier: &self.identifier,
+            symbol: &self.symbol,
+            start_time_str: &self.start_time,
+            end_time_str: &self.end_time,
+            data_type: crate::output::DataType::Bars,
+            interval: Some(interval),
+            desc: &BARS_DESCRIPTOR,
+            cli,
+            shutdown,
+        })
+        .await
+    }
 }
 
 impl AggTradesArgs {
-    fn parse_start_time(&self) -> Result<i64, CliError> {
-        parse_start_time_flexible(&self.start_time)
-    }
-
-    fn parse_end_time(&self) -> Result<i64, CliError> {
-        parse_end_time_flexible(&self.end_time)
-    }
-
     /// Execute aggTrades download (T129)
     pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
-        let start_time = self.parse_start_time()?;
-        let end_time = self.parse_end_time()?;
-
-        // Handle Reset/Verify modes before starting downloads
-        let resume_dir = cli.resume_dir.clone().unwrap_or_else(|| PathBuf::from(".resume"));
-        match cli.resume {
-            ResumeMode::Reset => handle_resume_reset(&resume_dir)?,
-            ResumeMode::Verify => handle_resume_verify(&resume_dir)?,
-            _ => {}
-        }
-
-        // Always use hierarchical structure - no exceptions
-        use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
-
-        let root = cli
-            .data_dir
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("data"));
-
-        // Ensure base directories exist
-        let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-            .with_data_type(DataType::AggTrades);
-        builder
-            .ensure_directories()
-            .map_err(|e| CliError::InvalidArgument(format!("Failed to create directories: {e}")))?;
-
-        // Split time range into monthly chunks
-        let month_ranges = split_into_month_ranges(start_time, end_time);
-
-        info!(
-            "Downloading {} months of aggTrades data: {} from {} to {}",
-            month_ranges.len(),
-            self.symbol,
-            self.start_time,
-            self.end_time
-        );
-
-        // Pre-build job configs for concurrent execution (F040)
-        let job_configs: Vec<_> = month_ranges
-            .into_iter()
-            .map(|month_range| {
-                let path_builder =
-                    OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-                        .with_data_type(DataType::AggTrades)
-                        .with_month(month_range.month);
-
-                let output_path = path_builder.build().map_err(|e| {
-                    CliError::InvalidArgument(format!("Failed to build output path: {e}"))
-                })?;
-                Ok((month_range, output_path))
-            })
-            .collect::<Result<Vec<_>, CliError>>()?;
-
-        // Execute jobs with configurable concurrency (F040)
-        let concurrency = cli.concurrency.max(1);
-        let config = JobConfig::from_cli(cli);
-        info!(
-            "Processing {} months with concurrency {}",
-            job_configs.len(),
-            concurrency
-        );
-
-        let results: Vec<Result<(), CliError>> = stream::iter(job_configs)
-            .map(|(month_range, output_path)| {
-                let identifier = self.identifier.clone();
-                let symbol = self.symbol.clone();
-                let config_clone = config.clone();
-                let shutdown_clone = shutdown.clone();
-
-                async move {
-                    info!(
-                        "Processing month {}: {} to {}",
-                        month_range.month, month_range.start_ms, month_range.end_ms
-                    );
-
-                    execute_aggtrades_job(
-                        &identifier,
-                        &symbol,
-                        &config_clone,
-                        shutdown_clone,
-                        month_range.start_ms,
-                        month_range.end_ms,
-                        output_path,
-                    )
-                    .await
-                }
-            })
-            .buffer_unordered(concurrency)
-            .collect()
-            .await;
-
-        // Check for errors
-        for result in results {
-            result?;
-        }
-
-        Ok(())
+        execute_download(DownloadParams {
+            identifier: &self.identifier,
+            symbol: &self.symbol,
+            start_time_str: &self.start_time,
+            end_time_str: &self.end_time,
+            data_type: crate::output::DataType::AggTrades,
+            interval: None,
+            desc: &AGGTRADES_DESCRIPTOR,
+            cli,
+            shutdown,
+        })
+        .await
     }
 }
+
+impl FundingArgs {
+    /// Execute funding rates download (T151)
+    pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
+        execute_download(DownloadParams {
+            identifier: &self.identifier,
+            symbol: &self.symbol,
+            start_time_str: &self.start_time,
+            end_time_str: &self.end_time,
+            data_type: crate::output::DataType::Funding,
+            interval: None,
+            desc: &FUNDING_DESCRIPTOR,
+            cli,
+            shutdown,
+        })
+        .await
+    }
+}
+
+// ─── Progress bar ────────────────────────────────────────────────────────────
 
 /// Create progress bar with style (T087)
 fn create_progress_bar(job: &DownloadJob) -> ProgressBar {
     let (total_bars, message) = match job.job_type {
-        crate::downloader::JobType::Bars { interval } => {
+        JobType::Bars { interval } => {
             let interval_ms = interval.to_milliseconds();
             let total_duration = job.end_time - job.start_time;
             let total_bars = ((total_duration + interval_ms - 1) / interval_ms) as u64;
@@ -757,367 +784,10 @@ fn create_progress_bar(job: &DownloadJob) -> ProgressBar {
     let pb = ProgressBar::new(total_bars);
     pb.set_style(
         ProgressStyle::default_bar()
-            // SAFETY: Template is a compile-time constant that has been tested.
-            // expect() is safe here as the template format is validated at compile time.
             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
             .expect("hardcoded template is valid")
             .progress_chars("#>-"),
     );
     pb.set_message(message);
     pb
-}
-
-/// Output result as JSON (T086)
-fn output_json_result(
-    job: &DownloadJob,
-    result: &Result<JobProgress, crate::downloader::DownloadError>,
-) {
-    let interval_str = match job.job_type {
-        crate::downloader::JobType::Bars { interval } => interval.to_string(),
-        _ => "N/A".to_string(),
-    };
-
-    let output = match result {
-        Ok(progress) => DownloadResult {
-            success: true,
-            identifier: job.identifier.clone(),
-            symbol: job.symbol.clone(),
-            interval: interval_str,
-            start_time: job.start_time,
-            end_time: job.end_time,
-            output_path: job.output_path.display().to_string(),
-            bars_downloaded: progress.downloaded_bars,
-            bars_written: progress.written_bars,
-            api_requests: progress.api_requests,
-            retries: progress.retries,
-            error: None,
-        },
-        Err(e) => DownloadResult {
-            success: false,
-            identifier: job.identifier.clone(),
-            symbol: job.symbol.clone(),
-            interval: interval_str,
-            start_time: job.start_time,
-            end_time: job.end_time,
-            output_path: job.output_path.display().to_string(),
-            bars_downloaded: 0,
-            bars_written: 0,
-            api_requests: 0,
-            retries: 0,
-            error: Some(e.to_string()),
-        },
-    };
-
-    println!("{}", serde_json::to_string(&output).unwrap());
-}
-
-/// Output result in human-readable format (T086)
-fn output_human_result(
-    job: &DownloadJob,
-    result: &Result<JobProgress, crate::downloader::DownloadError>,
-) {
-    match result {
-        Ok(progress) => {
-            println!("\nDownload completed successfully!");
-            if let crate::downloader::JobType::Bars { interval } = job.job_type {
-                println!("Symbol: {} {}", job.symbol, interval);
-            }
-            println!("Output: {}", job.output_path.display());
-            println!("Bars downloaded: {}", progress.downloaded_bars);
-            println!("Bars written: {}", progress.written_bars);
-            if progress.retries > 0 {
-                println!("Retries: {}", progress.retries);
-            }
-        }
-        Err(e) => {
-            eprintln!("\nDownload failed!");
-            eprintln!("Error: {e}");
-            error!("Download failed: {}", e);
-        }
-    }
-}
-
-/// Output aggTrades result as JSON
-fn output_aggtrades_json_result(
-    job: &DownloadJob,
-    result: &Result<JobProgress, crate::downloader::DownloadError>,
-) {
-    let output = match result {
-        Ok(progress) => serde_json::json!({
-            "success": true,
-            "identifier": job.identifier,
-            "symbol": job.symbol,
-            "data_type": "aggtrades",
-            "start_time": job.start_time,
-            "end_time": job.end_time,
-            "output_path": job.output_path.display().to_string(),
-            "trades_downloaded": progress.downloaded_bars,
-            "trades_written": progress.written_bars,
-            "api_requests": progress.api_requests,
-            "retries": progress.retries,
-            "error": null,
-        }),
-        Err(e) => serde_json::json!({
-            "success": false,
-            "identifier": job.identifier,
-            "symbol": job.symbol,
-            "data_type": "aggtrades",
-            "start_time": job.start_time,
-            "end_time": job.end_time,
-            "output_path": job.output_path.display().to_string(),
-            "trades_downloaded": 0,
-            "trades_written": 0,
-            "api_requests": 0,
-            "retries": 0,
-            "error": e.to_string(),
-        }),
-    };
-
-    println!("{}", serde_json::to_string(&output).unwrap());
-}
-
-/// Output aggTrades result in human-readable format
-fn output_aggtrades_human_result(
-    job: &DownloadJob,
-    result: &Result<JobProgress, crate::downloader::DownloadError>,
-) {
-    match result {
-        Ok(progress) => {
-            println!("\nAggTrades download completed successfully!");
-            println!("Symbol: {}", job.symbol);
-            println!("Output: {}", job.output_path.display());
-            println!("Trades downloaded: {}", progress.downloaded_bars);
-            println!("Trades written: {}", progress.written_bars);
-            if progress.retries > 0 {
-                println!("Retries: {}", progress.retries);
-            }
-        }
-        Err(e) => {
-            eprintln!("\nAggTrades download failed!");
-            eprintln!("Error: {e}");
-            error!("Download failed: {}", e);
-        }
-    }
-}
-
-impl FundingArgs {
-    fn parse_start_time(&self) -> Result<i64, CliError> {
-        parse_start_time_flexible(&self.start_time)
-    }
-
-    fn parse_end_time(&self) -> Result<i64, CliError> {
-        parse_end_time_flexible(&self.end_time)
-    }
-
-    /// Execute funding rates download (T151)
-    pub async fn execute(&self, cli: &Cli, shutdown: SharedShutdown) -> Result<(), CliError> {
-        let start_time = self.parse_start_time()?;
-        let end_time = self.parse_end_time()?;
-
-        // Handle Reset/Verify modes before starting downloads
-        let resume_dir = cli.resume_dir.clone().unwrap_or_else(|| PathBuf::from(".resume"));
-        match cli.resume {
-            ResumeMode::Reset => handle_resume_reset(&resume_dir)?,
-            ResumeMode::Verify => handle_resume_verify(&resume_dir)?,
-            _ => {}
-        }
-
-        // Always use hierarchical structure - no exceptions
-        use crate::output::{split_into_month_ranges, DataType, OutputPathBuilder};
-
-        let root = cli
-            .data_dir
-            .clone()
-            .unwrap_or_else(|| PathBuf::from("data"));
-
-        // Ensure base directories exist
-        let builder = OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-            .with_data_type(DataType::Funding);
-        builder
-            .ensure_directories()
-            .map_err(|e| CliError::InvalidArgument(format!("Failed to create directories: {e}")))?;
-
-        // Split time range into monthly chunks
-        let month_ranges = split_into_month_ranges(start_time, end_time);
-
-        info!(
-            "Downloading {} months of funding data: {} from {} to {}",
-            month_ranges.len(),
-            self.symbol,
-            self.start_time,
-            self.end_time
-        );
-
-        // Pre-build job configs for concurrent execution (F040)
-        let job_configs: Vec<_> = month_ranges
-            .into_iter()
-            .map(|month_range| {
-                let path_builder =
-                    OutputPathBuilder::new(root.clone(), &self.identifier, &self.symbol)
-                        .with_data_type(DataType::Funding)
-                        .with_month(month_range.month);
-
-                let output_path = path_builder.build().map_err(|e| {
-                    CliError::InvalidArgument(format!("Failed to build output path: {e}"))
-                })?;
-                Ok((month_range, output_path))
-            })
-            .collect::<Result<Vec<_>, CliError>>()?;
-
-        // Execute jobs with configurable concurrency (F040)
-        let concurrency = cli.concurrency.max(1);
-        let config = JobConfig::from_cli(cli);
-        info!(
-            "Processing {} months with concurrency {}",
-            job_configs.len(),
-            concurrency
-        );
-
-        let results: Vec<Result<(), CliError>> = stream::iter(job_configs)
-            .map(|(month_range, output_path)| {
-                let identifier = self.identifier.clone();
-                let symbol = self.symbol.clone();
-                let config_clone = config.clone();
-                let shutdown_clone = shutdown.clone();
-
-                async move {
-                    info!(
-                        "Processing month {}: {} to {}",
-                        month_range.month, month_range.start_ms, month_range.end_ms
-                    );
-
-                    execute_funding_job(
-                        &identifier,
-                        &symbol,
-                        &config_clone,
-                        shutdown_clone,
-                        month_range.start_ms,
-                        month_range.end_ms,
-                        output_path,
-                    )
-                    .await
-                }
-            })
-            .buffer_unordered(concurrency)
-            .collect()
-            .await;
-
-        // Check for errors
-        for result in results {
-            result?;
-        }
-
-        Ok(())
-    }
-}
-
-/// Helper function for concurrent funding job execution (F040)
-async fn execute_funding_job(
-    identifier: &str,
-    symbol: &str,
-    config: &JobConfig,
-    shutdown: SharedShutdown,
-    start_time: i64,
-    end_time: i64,
-    output_path: PathBuf,
-) -> Result<(), CliError> {
-    // Create download job
-    let job = DownloadJob::new_funding(
-        identifier.to_string(),
-        symbol.to_string(),
-        start_time,
-        end_time,
-        output_path.clone(),
-    );
-
-    let executor = config.create_executor(shutdown);
-
-    // Create progress bar
-    let progress = ProgressBar::new_spinner();
-    progress.set_message(format!("Downloading {symbol} funding rates"));
-
-    // Execute download
-    info!(
-        "Starting funding rates download: {} from {} to {}",
-        symbol, start_time, end_time
-    );
-
-    let result = executor.execute_funding_job(job.clone()).await;
-
-    progress.finish_and_clear();
-
-    // Format output
-    match config.output_format {
-        OutputFormat::Json => {
-            output_funding_json_result(&job, &result);
-        }
-        OutputFormat::Human => {
-            output_funding_human_result(&job, &result);
-        }
-    }
-
-    result.map(|_| ()).map_err(CliError::DownloadError)
-}
-
-/// Output funding result as JSON
-fn output_funding_json_result(
-    job: &DownloadJob,
-    result: &Result<JobProgress, crate::downloader::DownloadError>,
-) {
-    let output = match result {
-        Ok(progress) => serde_json::json!({
-            "success": true,
-            "identifier": job.identifier,
-            "symbol": job.symbol,
-            "data_type": "funding",
-            "start_time": job.start_time,
-            "end_time": job.end_time,
-            "output_path": job.output_path.display().to_string(),
-            "rates_downloaded": progress.downloaded_bars,
-            "rates_written": progress.written_bars,
-            "api_requests": progress.api_requests,
-            "retries": progress.retries,
-            "error": null,
-        }),
-        Err(e) => serde_json::json!({
-            "success": false,
-            "identifier": job.identifier,
-            "symbol": job.symbol,
-            "data_type": "funding",
-            "start_time": job.start_time,
-            "end_time": job.end_time,
-            "output_path": job.output_path.display().to_string(),
-            "rates_downloaded": 0,
-            "rates_written": 0,
-            "api_requests": 0,
-            "retries": 0,
-            "error": e.to_string(),
-        }),
-    };
-
-    println!("{}", serde_json::to_string(&output).unwrap());
-}
-
-/// Output funding result in human-readable format
-fn output_funding_human_result(
-    job: &DownloadJob,
-    result: &Result<JobProgress, crate::downloader::DownloadError>,
-) {
-    match result {
-        Ok(progress) => {
-            println!("\nFunding rates download completed successfully!");
-            println!("Symbol: {}", job.symbol);
-            println!("Output: {}", job.output_path.display());
-            println!("Rates downloaded: {}", progress.downloaded_bars);
-            println!("Rates written: {}", progress.written_bars);
-            if progress.retries > 0 {
-                println!("Retries: {}", progress.retries);
-            }
-        }
-        Err(e) => {
-            eprintln!("\nFunding rates download failed!");
-            eprintln!("Error: {e}");
-            error!("Download failed: {}", e);
-        }
-    }
 }

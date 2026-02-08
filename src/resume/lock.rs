@@ -71,24 +71,4 @@ impl ResumeLock {
             .map_err(|e| ResumeError::LockError(format!("Failed to acquire lock: {e}")))
     }
 
-    /// Legacy API: Create lock handle and acquire write lock in one step
-    ///
-    /// Returns Self with lock already acquired. Caller must call [`write()`](Self::write)
-    /// again if they need to hold the guard beyond this function's scope.
-    #[deprecated(note = "Use ResumeLock::new() followed by write() for proper guard handling")]
-    pub fn acquire(path: &Path) -> Result<Self, ResumeError> {
-        let mut lock = Self::new(path)?;
-        // Acquire and immediately release - for backward compatibility only
-        let _ = lock.write()?;
-        Ok(lock)
-    }
-
-    /// Legacy API: Try to create lock handle and acquire write lock in one step
-    #[deprecated(note = "Use ResumeLock::new() followed by try_write() for proper guard handling")]
-    pub fn try_acquire(path: &Path) -> Result<Self, ResumeError> {
-        let mut lock = Self::new(path)?;
-        // Try to acquire and immediately release - for backward compatibility only
-        let _ = lock.try_write()?;
-        Ok(lock)
-    }
 }
